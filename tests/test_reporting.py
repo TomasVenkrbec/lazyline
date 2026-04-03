@@ -427,8 +427,8 @@ def test_top_shows_showing_n_of_m():
     output = stream.getvalue()
     assert "Showing top 2 of 3 functions" in output
     # Total should include ALL functions, not just displayed
-    # auto selects ms for median ~0.5s
-    assert "1600.00" in output
+    # auto selects s for max=1.0s
+    assert "1.6000" in output
 
 
 def test_no_showing_header_without_top():
@@ -718,7 +718,7 @@ def _result_with_time(total_time=0.5, call_count=10):
 
 
 def test_unit_auto_is_default():
-    # Default unit is auto; 0.5s median → selects ms
+    # Default unit is auto; 0.5s max → selects ms
     stream = io.StringIO()
     print_summary([_result_with_time()], stream=stream)
     output = stream.getvalue()
@@ -837,6 +837,17 @@ def test_auto_zero_times_defaults_to_seconds():
     print_summary(
         [_result_with_time(total_time=0.0, call_count=0)], stream=stream, unit="auto"
     )
+    assert "Total (s)" in stream.getvalue()
+
+
+def test_auto_uses_max_not_median():
+    # Many fast functions (~50ns) + one slow function (2s).
+    # Median would pick "ns" → 2_000_000_000 ns (unreadable).
+    # Max picks "s" so the slow function stays readable.
+    fast = [_result_with_time(total_time=5e-8, call_count=1) for _ in range(20)]
+    slow = [_result_with_time(total_time=2.0, call_count=1)]
+    stream = io.StringIO()
+    print_summary(fast + slow, stream=stream, unit="auto")
     assert "Total (s)" in stream.getvalue()
 
 

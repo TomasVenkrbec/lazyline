@@ -6,7 +6,6 @@ import fnmatch
 import linecache
 import os
 import shutil
-import statistics
 import sys
 from typing import TYPE_CHECKING, Final, NamedTuple, TextIO
 
@@ -72,15 +71,20 @@ _UNITS: dict[str, _TimeUnit] = {
 
 
 def _auto_select_unit(results: list[FunctionProfile]) -> _TimeUnit:
-    """Pick the best display unit based on the median total_time."""
+    """Pick the best display unit based on the maximum total_time.
+
+    Using max ensures that the largest value is always displayed in a
+    human-readable range, avoiding multi-billion nanosecond numbers when
+    a single slow function dominates an otherwise fast profile.
+    """
     if not results:
         return _UNITS["s"]
-    med = statistics.median(fp.total_time for fp in results)
-    if med <= 0 or med >= 1.0:
+    peak = max(fp.total_time for fp in results)
+    if peak <= 0 or peak >= 1.0:
         return _UNITS["s"]
-    if med >= 1e-3:
+    if peak >= 1e-3:
         return _UNITS["ms"]
-    if med >= 1e-6:
+    if peak >= 1e-6:
         return _UNITS["us"]
     return _UNITS["ns"]
 
@@ -497,7 +501,7 @@ _ELLIPSIS_SENTINEL = object()
 def _prepare_lines(fp: FunctionProfile, compact: bool) -> list[LineProfile | object]:
     """Build the list of lines to print, inserting ellipsis markers in compact mode."""
     if any(lp.source for lp in fp.lines):
-        raw_lines: list[LineProfile | object] = fp.lines  # ty: ignore[invalid-assignment]
+        raw_lines: list[LineProfile | object] = fp.lines  # ty: ignore
     else:
         raw_lines = _fill_source_from_cache(fp)
 
