@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Callable instance unwrapping: functions hidden inside callable wrapper
+  instances (e.g., a decorator that replaces a function with a callable
+  object storing the original as an attribute) are now discovered and
+  profiled automatically.
+
 ### Fixed
 
 - Auto time unit selection now uses the maximum `total_time` instead of the

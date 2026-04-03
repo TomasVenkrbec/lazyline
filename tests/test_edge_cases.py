@@ -1,6 +1,7 @@
 """Tests for Python edge cases: registration, profiling, result collection."""
 
 import asyncio
+import types
 import warnings
 from pathlib import Path
 
@@ -46,6 +47,16 @@ def _register_module_and_profile(mod, exercise_func, *args, **kwargs):
 def _names(results):
     """Return the set of function names from profiling results."""
     return {r.name for r in results}
+
+
+class _FakeWrapper:
+    """Callable instance that stores the original function as an attribute."""
+
+    def __init__(self, func):
+        self.worker_func = func
+
+    def __call__(self, *args, **kwargs):
+        return self.worker_func(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +119,107 @@ class TestRegistration:
             getattr(f, "__code__", None) for f in profiler.functions if f is not None
         }
         assert spicy.WithDescriptors.cached_static.__wrapped__.__code__ in codes
+
+    def test_callable_instance_wrapping_function(self):
+        """register_modules discovers functions inside callable wrapper instances."""
+        profiler = create_profiler()
+        mod = types.ModuleType("_fake")
+        mod.__file__ = "/tmp/_fake.py"
+
+        def real_func(x):
+            return x + 1
+
+        real_func.__module__ = mod.__name__
+        # Only expose the wrapper — real_func is NOT a direct module attribute,
+        # so add_module cannot find it. Pattern 2 must discover it.
+        mod.wrapped = _FakeWrapper(real_func)
+
+        register_modules(profiler, [mod])
+        codes = {getattr(f, "__code__", None) for f in profiler.functions}
+        assert real_func.__code__ in codes
+
+    def test_callable_instance_foreign_module_skipped(self):
+        """Callable wrapper with foreign-module function is skipped."""
+        profiler = create_profiler()
+        mod = types.ModuleType("_fake")
+        mod.__file__ = "/tmp/_fake.py"
+
+        def foreign_func(x):
+            return x + 1
+
+        foreign_func.__module__ = "some_other_module"
+        mod.wrapped = _FakeWrapper(foreign_func)
+
+        register_modules(profiler, [mod])
+        codes = {getattr(f, "__code__", None) for f in profiler.functions}
+        assert foreign_func.__code__ not in codes
+
+    def test_callable_instance_fallthrough_from_foreign_wrapped(self):
+        """When __wrapped__ is foreign, Pattern 2 still finds local functions."""
+        profiler = create_profiler()
+        mod = types.ModuleType("_fake")
+        mod.__file__ = "/tmp/_fake.py"
+
+        def local_func(x):
+            return x + 1
+
+        def foreign_func(x):
+            return x * 2
+
+        local_func.__module__ = mod.__name__
+        foreign_func.__module__ = "other_module"
+
+        # Wrapper has foreign __wrapped__ AND stores a local function.
+        wrapper = _FakeWrapper(local_func)
+        wrapper.__wrapped__ = foreign_func
+        mod.combo = wrapper
+
+        register_modules(profiler, [mod])
+        codes = {getattr(f, "__code__", None) for f in profiler.functions}
+        assert local_func.__code__ in codes
+        assert foreign_func.__code__ not in codes
+
+
+# ---------------------------------------------------------------------------
+# _find_hidden_functions guard clauses (tested via register_modules)
+# ---------------------------------------------------------------------------
+class TestFindHiddenFunctionsGuards:
+    """Verify guard clauses don't cause crashes or false registrations."""
+
+    def test_module_with_non_callable_attrs_no_crash(self):
+        """Non-callable module attributes are silently skipped."""
+        profiler = create_profiler()
+        mod = types.ModuleType("_guard")
+        mod.__file__ = "/tmp/_guard.py"
+        mod.a_string = "hello"
+        mod.a_number = 42
+        mod.a_list = [1, 2, 3]
+        register_modules(profiler, [mod])
+        # No crash, no functions registered.
+        assert len(profiler.functions) == 0
+
+    def test_module_with_builtin_callable_no_crash(self):
+        """Built-in callables (no __dict__) are handled without TypeError."""
+        profiler = create_profiler()
+        mod = types.ModuleType("_guard")
+        mod.__file__ = "/tmp/_guard.py"
+        mod.builtin = len  # callable, not a type, vars() raises TypeError
+        register_modules(profiler, [mod])
+        assert len(profiler.functions) == 0
+
+    def test_module_with_class_no_false_unwrap(self):
+        """Classes on a module don't trigger false unwrapping."""
+        profiler = create_profiler()
+        mod = types.ModuleType("_guard")
+        mod.__file__ = "/tmp/_guard.py"
+
+        class MyClass:
+            pass
+
+        mod.cls = MyClass
+        register_modules(profiler, [mod])
+        # MyClass has no methods with __module__ == "_guard", nothing registered.
+        assert len(profiler.functions) == 0
 
 
 # ---------------------------------------------------------------------------

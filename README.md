@@ -51,7 +51,8 @@ in a single command:
   is discovered and instrumented automatically
 - Automatic module and namespace package discovery (point at a
   package name, directory, or `.py` file)
-- `lru_cache` and other C-extension wrappers auto-unwrapped
+- `lru_cache`, C-extension wrappers, and callable wrapper instances
+  auto-unwrapped
 
 #### Subprocess and worker profiling
 
@@ -356,7 +357,8 @@ net memory allocation delta (bytes allocated minus freed).
    filesystem scanning for implicit namespace packages.
 2. **Registration** — registers every Python function with
    `line_profiler`'s `LineProfiler.add_module()`. C extensions
-   are skipped; `lru_cache` wrappers are auto-unwrapped.
+   are skipped; `lru_cache` wrappers and callable wrapper instances
+   are auto-unwrapped.
 3. **Execution** — runs the user's command with profiling
    enabled. `line_profiler` uses `sys.monitoring` (Python 3.12+)
    or `sys.settrace` for deterministic per-line tracing.

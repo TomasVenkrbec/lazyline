@@ -123,12 +123,24 @@ def register_module_level_code(
 
 
 def _register_unwrapped(profiler: LineProfiler, mod: types.ModuleType) -> int:
-    """Register ``__wrapped__`` functions for C-extension wrappers.
+    """Register functions hidden inside wrappers that ``add_module`` skips.
 
-    Scans module-level attributes *and* class members for callables like
-    ``lru_cache`` wrappers that ``add_module`` skips because they have no
-    Python bytecode. If the underlying ``__wrapped__`` function is a Python
-    function defined in the same module, register it directly.
+    Handles two patterns:
+
+    1. **``__wrapped__`` (C-extension wrappers)** — e.g., ``lru_cache``
+       replaces the Python function with a C callable that has a
+       ``__wrapped__`` attribute pointing to the original.
+    2. **Callable instances storing the original as an attribute** — e.g.,
+       a decorator that replaces a function with a callable instance that
+       keeps the original function as an instance attribute.
+
+    Pattern 2 uses a heuristic: it registers every ``types.FunctionType``
+    found in ``vars(candidate)`` whose ``__module__`` matches the
+    containing module.  This can produce false positives when a callable
+    instance stores references to same-module functions that are not the
+    "wrapped original" (e.g., callbacks, strategies).  The ``__module__``
+    check limits the blast radius, and duplicate-code guards in the caller
+    prevent double-registration, so the practical risk is low.
 
     Parameters
     ----------
@@ -149,26 +161,53 @@ def _register_unwrapped(profiler: LineProfiler, mod: types.ModuleType) -> int:
     count = 0
 
     for candidate in _iter_unwrap_candidates(mod):
-        wrapped = getattr(candidate, "__wrapped__", None)
-        if wrapped is None:
-            continue
-        # Only unwrap if the outer callable is NOT a Python function
-        # (i.e., it's a C-extension wrapper that add_module skipped).
-        if isinstance(candidate, types.FunctionType):
-            continue
-        if not isinstance(wrapped, types.FunctionType):
-            continue
-        # Only unwrap if the inner function belongs to this module.
-        if getattr(wrapped, "__module__", None) != mod.__name__:
-            continue
-        # Skip if already registered (e.g., by a previous add_module call).
-        if getattr(wrapped, "__code__", None) in registered_codes:
-            continue
-        profiler.add_function(wrapped)
-        registered_codes.add(wrapped.__code__)
-        logger.debug("Unwrapped %s from C-extension wrapper.", wrapped.__qualname__)
-        count += 1
+        for func in _find_hidden_functions(candidate, mod.__name__):
+            if getattr(func, "__code__", None) in registered_codes:
+                continue
+            profiler.add_function(func)
+            registered_codes.add(func.__code__)
+            logger.debug("Unwrapped %s from wrapper.", func.__qualname__)
+            count += 1
     return count
+
+
+def _find_hidden_functions(
+    candidate: object, module_name: str
+) -> list[types.FunctionType]:
+    """Extract Python functions hidden inside a wrapper object.
+
+    Returns functions that belong to *module_name* and are not directly
+    visible to ``add_module`` because the wrapper is not a
+    ``types.FunctionType``.
+    """
+    # Plain functions are already handled by add_module.
+    if isinstance(candidate, types.FunctionType):
+        return []
+
+    # Pattern 1: __wrapped__ (lru_cache, singledispatch, etc.).
+    wrapped = getattr(candidate, "__wrapped__", None)
+    if (
+        isinstance(wrapped, types.FunctionType)
+        and getattr(wrapped, "__module__", None) == module_name
+    ):
+        return [wrapped]
+    # If __wrapped__ exists but belongs to another module, fall through
+    # to Pattern 2 in case the wrapper also stores a local function.
+
+    # Pattern 2: callable instances that store the original function as an
+    # instance attribute (e.g. ParallelWorker.worker_func).
+    if isinstance(candidate, type) or not callable(candidate):
+        return []
+    try:
+        attrs = vars(candidate)
+    except TypeError:
+        return []
+    return [
+        val
+        for val in attrs.values()
+        if isinstance(val, types.FunctionType)
+        and getattr(val, "__module__", None) == module_name
+    ]
 
 
 def _iter_unwrap_candidates(mod: types.ModuleType):
