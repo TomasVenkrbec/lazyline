@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Auto time unit selection now uses the maximum `total_time` instead of the
   median, preventing unreadable values when a single slow function dominates
   an otherwise fast profile.
+- Multiprocessing workers now inherit the parent process's profiler instead
+  of creating a fresh instance, fixing missing results when `line_profiler`'s
+  bytecode hash mappings did not survive `fork()`.
 
 ## [0.1.0] - 2026-04-03
 

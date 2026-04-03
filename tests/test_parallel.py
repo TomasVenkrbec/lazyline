@@ -13,6 +13,7 @@ from line_profiler.line_profiler import LineStats
 
 from lazyline.parallel import (
     _collect_worker_stats,
+    _subtract_stats,
     merge_stats,
     profiling_hooks,
 )
@@ -207,6 +208,136 @@ def test_pool_maxtasksperchild_profiled():
     """Worker replacement via maxtasksperchild still produces stats."""
     results = _run_parallel_and_collect(
         lambda mod: mod.run_with_mp_pool_maxtasks(list(range(20)))
+    )
+    func_names = [r.name for r in results]
+    assert "slow_computation" in func_names
+
+    sc = next(r for r in results if r.name == "slow_computation")
+    assert sc.total_time > 0
+    assert sc.call_count > 0
+
+
+# ---------------------------------------------------------------------------
+# _subtract_stats
+# ---------------------------------------------------------------------------
+
+
+class TestSubtractStats:
+    def test_basic_subtraction(self):
+        """Worker contribution = total - baseline."""
+        baseline = LineStats({("f.py", 1, "foo"): [(1, 10, 5000)]}, 1e-9)
+        total = LineStats({("f.py", 1, "foo"): [(1, 25, 12000)]}, 1e-9)
+        delta = _subtract_stats(total, baseline)
+        assert delta.timings[("f.py", 1, "foo")] == [(1, 15, 7000)]
+
+    def test_empty_baseline(self):
+        """All total entries kept when baseline has no matching key."""
+        total = LineStats({("f.py", 1, "foo"): [(1, 10, 5000)]}, 1e-9)
+        baseline = LineStats({}, 1e-9)
+        delta = _subtract_stats(total, baseline)
+        assert delta.timings[("f.py", 1, "foo")] == [(1, 10, 5000)]
+
+    def test_zero_delta_filtered(self):
+        """Lines where worker added zero hits are excluded."""
+        baseline = LineStats({("f.py", 1, "foo"): [(1, 10, 5000), (2, 5, 3000)]}, 1e-9)
+        total = LineStats({("f.py", 1, "foo"): [(1, 10, 5000), (2, 8, 4500)]}, 1e-9)
+        delta = _subtract_stats(total, baseline)
+        # Line 1: dh=0 → excluded.  Line 2: dh=3 → kept.
+        assert delta.timings[("f.py", 1, "foo")] == [(2, 3, 1500)]
+
+    def test_function_with_all_zero_delta_excluded(self):
+        """Function dropped entirely when no lines have positive delta."""
+        baseline = LineStats({("f.py", 1, "foo"): [(1, 10, 5000)]}, 1e-9)
+        total = LineStats({("f.py", 1, "foo"): [(1, 10, 5000)]}, 1e-9)
+        delta = _subtract_stats(total, baseline)
+        assert ("f.py", 1, "foo") not in delta.timings
+
+    def test_disjoint_functions(self):
+        """Function in total but not in baseline is kept as-is."""
+        baseline = LineStats({("a.py", 1, "f"): [(1, 5, 100)]}, 1e-9)
+        total = LineStats(
+            {
+                ("a.py", 1, "f"): [(1, 5, 100)],
+                ("b.py", 1, "g"): [(1, 10, 200)],
+            },
+            1e-9,
+        )
+        delta = _subtract_stats(total, baseline)
+        # "f" had zero delta, excluded.  "g" is new, kept.
+        assert ("a.py", 1, "f") not in delta.timings
+        assert delta.timings[("b.py", 1, "g")] == [(1, 10, 200)]
+
+    def test_multiline_function(self):
+        """Multiple lines within a function are handled independently."""
+        baseline = LineStats(
+            {("f.py", 1, "foo"): [(1, 5, 100), (2, 0, 0), (3, 5, 200)]},
+            1e-9,
+        )
+        total = LineStats(
+            {("f.py", 1, "foo"): [(1, 5, 100), (2, 3, 50), (3, 10, 500)]},
+            1e-9,
+        )
+        delta = _subtract_stats(total, baseline)
+        # Line 1: dh=0 excluded.  Line 2: dh=3, new.  Line 3: dh=5.
+        assert delta.timings[("f.py", 1, "foo")] == [(2, 3, 50), (3, 5, 300)]
+
+    def test_preserves_unit(self):
+        """Output LineStats has the same unit as the total."""
+        baseline = LineStats({}, 1e-6)
+        total = LineStats({("f.py", 1, "foo"): [(1, 1, 100)]}, 1e-6)
+        delta = _subtract_stats(total, baseline)
+        assert delta.unit == 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Parent profiler inheritance: integration
+# ---------------------------------------------------------------------------
+
+
+def _run_parallel_with_parent_profiler(invoke_fn):
+    """Run parallel work passing the parent profiler to profiling_hooks."""
+    from lazyline.profiling import (
+        build_scope_paths,
+        collect_results,
+        create_profiler,
+        register_modules,
+    )
+    from tests import _parallel_fixture as mod
+
+    modules = [mod]
+    profiler = create_profiler()
+    scope_paths = build_scope_paths(modules)
+    register_modules(profiler, modules)
+
+    module_names = [m.__name__ for m in modules]
+    with profiling_hooks(module_names, parent_profiler=profiler) as worker_holder:
+        profiler.enable_by_count()
+        try:
+            invoke_fn(mod)
+        finally:
+            profiler.disable_by_count()
+
+    stats = merge_stats(profiler.get_stats(), worker_holder.stats)
+    return collect_results(stats, scope_paths=scope_paths)
+
+
+def test_parent_profiler_process_pool():
+    """ProcessPoolExecutor with parent profiler produces worker results."""
+    results = _run_parallel_with_parent_profiler(
+        lambda mod: mod.run_with_process_pool(list(range(20)))
+    )
+    func_names = [r.name for r in results]
+    assert "slow_computation" in func_names
+
+    sc = next(r for r in results if r.name == "slow_computation")
+    assert sc.total_time > 0
+    assert sc.call_count > 0
+
+
+def test_parent_profiler_mp_pool():
+    """multiprocessing.Pool with parent profiler produces worker results."""
+    results = _run_parallel_with_parent_profiler(
+        lambda mod: mod.run_with_mp_pool(list(range(20)))
     )
     func_names = [r.name for r in results]
     assert "slow_computation" in func_names

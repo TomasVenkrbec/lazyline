@@ -244,7 +244,7 @@ def _profile(
     wall_start = time.monotonic()
     with (
         subprocess_hooks(scopes) as sub_holder,
-        profiling_hooks(module_names) as worker_holder,
+        profiling_hooks(module_names, parent_profiler=profiler) as worker_holder,
     ):
         exit_code = execute_command(profiler, command)
     wall_time = time.monotonic() - wall_start

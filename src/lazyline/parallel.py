@@ -31,11 +31,14 @@ if TYPE_CHECKING:
     import types
     from collections.abc import Callable
 
+    from line_profiler import LineProfiler
+
 logger = logging.getLogger(__name__)
 
 # Globals set before fork, read by workers via CoW.
 _LAZYLINE_MODULE_NAMES: list[str] | None = None
 _LAZYLINE_STATS_DIR: str | None = None
+_LAZYLINE_PARENT_PROFILER: LineProfiler | None = None
 
 # Stashed originals for unpatching.
 _ORIGINAL_PROCESS_WORKER: Callable[..., Any] | None = None
@@ -43,7 +46,9 @@ _ORIGINAL_POOL_WORKER: Callable[..., Any] | None = None
 
 
 @contextlib.contextmanager
-def profiling_hooks(module_names: list[str]):
+def profiling_hooks(
+    module_names: list[str], parent_profiler: LineProfiler | None = None
+):
     """Install per-worker profiling hooks for stdlib multiprocessing.
 
     Monkey-patches ``concurrent.futures.process._process_worker`` and
@@ -56,6 +61,16 @@ def profiling_hooks(module_names: list[str]):
     ----------
     module_names
         Dotted module names to register in each worker's profiler.
+    parent_profiler
+        The parent process's ``LineProfiler``.  When provided, forked
+        workers inherit it (via copy-on-write) instead of creating a
+        fresh profiler.  This is necessary because ``line_profiler``'s
+        bytecode hash matching — which allows a profiler to trace code
+        objects that differ by identity but share the same bytecode —
+        does not survive ``fork()`` for fresh profiler instances.
+        Inheriting the parent profiler preserves the hash mappings
+        established in the parent process (e.g. between discovery-time
+        and ``runpy``-time code objects).
 
     Yields
     ------
@@ -65,6 +80,7 @@ def profiling_hooks(module_names: list[str]):
     """
     global _LAZYLINE_MODULE_NAMES, _LAZYLINE_STATS_DIR
     global _ORIGINAL_PROCESS_WORKER, _ORIGINAL_POOL_WORKER
+    global _LAZYLINE_PARENT_PROFILER
 
     if _ORIGINAL_PROCESS_WORKER is not None:
         msg = "profiling_hooks is not reentrant — already active"
@@ -73,6 +89,7 @@ def profiling_hooks(module_names: list[str]):
     stats_dir = tempfile.mkdtemp(prefix="lazyline_worker_stats_")
     _LAZYLINE_MODULE_NAMES = module_names
     _LAZYLINE_STATS_DIR = stats_dir
+    _LAZYLINE_PARENT_PROFILER = parent_profiler
     _ORIGINAL_PROCESS_WORKER = concurrent.futures.process._process_worker
     _ORIGINAL_POOL_WORKER = (
         multiprocessing.pool.worker  # ty: ignore[unresolved-attribute]
@@ -94,6 +111,7 @@ def profiling_hooks(module_names: list[str]):
         )
         _LAZYLINE_MODULE_NAMES = None
         _LAZYLINE_STATS_DIR = None
+        _LAZYLINE_PARENT_PROFILER = None
         _ORIGINAL_PROCESS_WORKER = None
         _ORIGINAL_POOL_WORKER = None
 
@@ -118,8 +136,41 @@ class _StatsHolder:
         self.stats: LineStats | None = None
 
 
-def _setup_worker_profiler():
-    """Create a ``LineProfiler`` and register modules for this worker process."""
+def _get_worker_profiler():
+    """Obtain a profiler for this worker process.
+
+    When a parent profiler is available (set via :func:`profiling_hooks`),
+    inherits it and snapshots its baseline stats so only the worker's
+    contribution can be extracted later.
+
+    Falls back to creating a fresh profiler from ``sys.modules`` when no
+    parent profiler was provided.
+
+    Returns
+    -------
+    tuple[LineProfiler, LineStats | None]
+        The profiler to use and a baseline snapshot (``None`` when a
+        fresh profiler was created — all its stats are worker-only).
+    """
+    if _LAZYLINE_PARENT_PROFILER is not None:
+        profiler = _LAZYLINE_PARENT_PROFILER
+        # The inherited profiler carries the parent's accumulated timings.
+        # Snapshot them so _dump_worker_stats can subtract the baseline and
+        # emit only the worker's contribution.
+        profiler.disable_by_count()
+        baseline = profiler.get_stats()
+        return profiler, baseline
+
+    return _setup_fresh_profiler(), None
+
+
+def _setup_fresh_profiler():
+    """Create a fresh ``LineProfiler`` and register modules.
+
+    Used as fallback when no parent profiler is available (e.g. in
+    subprocess bootstrap or when ``profiling_hooks`` was called without
+    a ``parent_profiler``).
+    """
     import warnings
 
     from line_profiler import LineProfiler
@@ -141,11 +192,26 @@ def _setup_worker_profiler():
     return profiler
 
 
-def _dump_worker_stats(profiler) -> None:  # noqa: ANN001
-    """Disable the profiler and write stats to the shared temp directory."""
+def _dump_worker_stats(
+    profiler,  # noqa: ANN001
+    baseline: LineStats | None = None,
+) -> None:
+    """Disable the profiler and write stats to the shared temp directory.
+
+    Parameters
+    ----------
+    profiler
+        The worker's ``LineProfiler`` instance.
+    baseline
+        When the profiler was inherited from the parent, this is the
+        snapshot taken before the worker started.  The baseline is
+        subtracted so only the worker's contribution is written.
+    """
     try:
         profiler.disable_by_count()
         stats = profiler.get_stats()
+        if baseline is not None:
+            stats = _subtract_stats(stats, baseline)
         if stats.timings and _LAZYLINE_STATS_DIR is not None:
             tag = f"{os.getpid()}_{time.monotonic_ns()}"
             stats_path = os.path.join(_LAZYLINE_STATS_DIR, f"{tag}.pkl")
@@ -162,16 +228,38 @@ def _dump_worker_stats(profiler) -> None:  # noqa: ANN001
         )
 
 
+def _subtract_stats(total: LineStats, baseline: LineStats) -> LineStats:
+    """Subtract baseline timings from total to get the delta.
+
+    Only keeps entries where the worker added hits (i.e. the function
+    was actually called in the worker).  Matches lines by ``lineno``
+    rather than position for robustness.
+    """
+    delta: dict[tuple[str, int, str], list[tuple[int, int, int]]] = {}
+    for key, after_lines in total.timings.items():
+        before_lines = baseline.timings.get(key, [])
+        before_by_lineno = {ln: (h, t) for ln, h, t in before_lines}
+        new_lines = []
+        for lineno, hits, raw_time in after_lines:
+            bh, bt = before_by_lineno.get(lineno, (0, 0))
+            dh = hits - bh
+            if dh > 0:
+                new_lines.append((lineno, dh, raw_time - bt))
+        if new_lines:
+            delta[key] = new_lines
+    return LineStats(delta, total.unit)
+
+
 def _patched_process_worker(*args, **kwargs):  # noqa: ANN002, ANN003
     """Wrap ``concurrent.futures.process._process_worker`` with profiling."""
-    profiler = _setup_worker_profiler()
+    profiler, baseline = _get_worker_profiler()
     profiler.enable_by_count()
     try:
         return _ORIGINAL_PROCESS_WORKER(  # ty: ignore[call-non-callable]
             *args, **kwargs
         )
     finally:
-        _dump_worker_stats(profiler)
+        _dump_worker_stats(profiler, baseline)
 
 
 def _sigterm_to_exit(signum, frame):  # noqa: ANN001, ARG001
@@ -188,7 +276,7 @@ def _patched_pool_worker(*args, **kwargs):  # noqa: ANN002, ANN003
     cleanly. ``SystemExit`` propagates through the worker loop (which only
     catches ``Exception``) and is handled by ``BaseProcess._bootstrap``.
     """
-    profiler = _setup_worker_profiler()
+    profiler, baseline = _get_worker_profiler()
     profiler.enable_by_count()
     signal.signal(signal.SIGTERM, _sigterm_to_exit)
     try:
@@ -196,7 +284,7 @@ def _patched_pool_worker(*args, **kwargs):  # noqa: ANN002, ANN003
     finally:
         # Ignore further SIGTERM during stats dump.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        _dump_worker_stats(profiler)
+        _dump_worker_stats(profiler, baseline)
 
 
 def _warn_non_fork_start_method() -> None:
