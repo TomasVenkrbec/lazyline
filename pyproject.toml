@@ -1,44 +1,76 @@
 [project]
 name = "lazyline"
 version = "0.1.0"
-description = ""
+description = "Zero-config line-level profiler for Python packages — no decorators, no code changes."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "Tomáš Venkrbec", email = "venkrbec.tomas@gmail.com" }]
+keywords = [
+    "profiler",
+    "profiling",
+    "line-profiler",
+    "performance",
+    "benchmark",
+    "optimization",
+    "bottleneck",
+    "zero-config",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Debuggers",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Topic :: System :: Benchmark",
     "Typing :: Typed",
 ]
-dependencies = ["typer>=0.15"]
+dependencies = ["typer>=0.15", "line_profiler>=4.1.0"]
+
+[project.optional-dependencies]
+color = ["Pygments>=2.14.0"]
 
 [project.scripts]
 lazyline = "lazyline.__main__:app"
 
 [project.urls]
-Homepage = "https://github.com/tvenkrbec/lazyline"
-Repository = "https://github.com/tvenkrbec/lazyline"
-Issues = "https://github.com/tvenkrbec/lazyline/issues"
+Homepage = "https://github.com/TomasVenkrbec/lazyline"
+Repository = "https://github.com/TomasVenkrbec/lazyline"
+Documentation = "https://github.com/TomasVenkrbec/lazyline#readme"
+Changelog = "https://github.com/TomasVenkrbec/lazyline/blob/main/CHANGELOG.md"
+Issues = "https://github.com/TomasVenkrbec/lazyline/issues"
 
 [build-system]
 requires = ["uv_build>=0.11.3,<0.12.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-cov>=6", "ty>=0.0.1a1", "pre-commit>=4"]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=6",
+    "ty>=0.0.1a1",
+    "pre-commit>=4",
+    "ruff>=0.11",
+    "lazyline[color]",
+]
 
 [tool.uv]
 default-groups = ["dev"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "benchmarks"]
+pythonpath = ["."]
 addopts = ["-ra", "--strict-markers", "--strict-config"]
+filterwarnings = [
+    "ignore:This process .* is multi-threaded:DeprecationWarning",
+]
 
 
 
@@ -58,11 +90,13 @@ known-first-party = ["lazyline"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*.py" = ["D"]
+"benchmarks/*.py" = ["D"]
 "*/__init__.py" = ["F401"]
 
 [tool.coverage.run]
 source = ["lazyline"]
 branch = true
+omit = ["*/benchmarks/*"]
 
 [tool.coverage.report]
 show_missing = true
