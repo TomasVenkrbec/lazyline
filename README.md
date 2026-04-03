@@ -414,14 +414,3 @@ Other limitations:
 
 See [`benchmarks/README.md`](benchmarks/README.md) for detailed
 overhead measurements and methodology.
-
-## Development
-
-```bash
-./docker/build.sh
-./docker/run.sh
-```
-
-See [`CLAUDE.md`](CLAUDE.md) for project structure and
-conventions, [`DESIGN.md`](DESIGN.md) for architecture and
-plan.
