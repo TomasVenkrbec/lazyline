@@ -1,8 +1,15 @@
 import json
+from pathlib import Path
 
 from typer.testing import CliRunner
 
-from lazyline.__main__ import _split_scopes_and_options, _warn_high_hit_functions, app
+from lazyline.__main__ import (
+    _DisplayOptions,
+    _reparse_options,
+    _split_scopes_and_options,
+    _warn_high_hit_functions,
+    app,
+)
 from lazyline.export import to_json
 from lazyline.models import (
     FunctionProfile,
@@ -27,7 +34,7 @@ def test_no_args_shows_help():
 
 
 def test_run_no_command():
-    result = runner.invoke(app, ["run", "json"])
+    result = runner.invoke(app, ["run", "json", "--"])
     assert result.exit_code == 1
     assert "No command provided" in result.output
     assert "json" in result.output  # scope echoed in error
@@ -342,13 +349,13 @@ def test_show_top_zero_rejected(tmp_path):
     assert "--top must be at least 1" in result.output
 
 
-def test_run_without_separator():
+def test_run_missing_separator_error():
     result = runner.invoke(
         app,
         ["run", "json", "python", "-c", "import json; json.dumps(1)"],
     )
-    assert result.exit_code == 0
-    assert "Discovered" in result.output
+    assert result.exit_code == 1
+    assert "Missing '--'" in result.output
 
 
 def test_run_then_show_roundtrip(tmp_path):
@@ -473,14 +480,14 @@ def test_compact_after_scope_before_separator():
     assert "def " not in result.output
 
 
-def test_misplaced_flag_without_separator():
-    """lazyline run json --top 1 python -c '...' should detect misplaced flag."""
+def test_missing_separator_with_flags():
+    """lazyline run json --top 1 python -c '...' without -- should error."""
     result = runner.invoke(
         app,
-        ["run", "json", "--top", "python", "-c", "pass"],
+        ["run", "json", "--top", "1", "python", "-c", "pass"],
     )
     assert result.exit_code == 1
-    assert "looks like a lazyline option" in result.output
+    assert "Missing '--'" in result.output
 
 
 def test_quiet_flag():
@@ -509,6 +516,29 @@ def test_filter_flag():
     )
     assert result.exit_code == 0
     # If any results, they should all match *dumps*
+    if (
+        "No profiling data" not in result.output
+        and "No functions matching" not in result.output
+    ):
+        assert "dumps" in result.output
+
+
+def test_filter_auto_wraps_bare_pattern():
+    """--filter 'dumps' (no wildcards) should match like '*dumps*'."""
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--filter",
+            "dumps",
+            "json",
+            "--",
+            "python",
+            "-c",
+            "import json; json.dumps(1)",
+        ],
+    )
+    assert result.exit_code == 0
     if (
         "No profiling data" not in result.output
         and "No functions matching" not in result.output
@@ -547,6 +577,7 @@ def test_show_with_unit_ms(tmp_path):
             "--output",
             str(out),
             "json",
+            "--",
             "python",
             "-c",
             "import json; json.dumps(1)",
@@ -578,7 +609,7 @@ def test_unit_after_scope_before_separator():
 def test_run_with_invalid_unit():
     result = runner.invoke(
         app,
-        ["run", "--unit", "invalid", "json", "python", "-c", "pass"],
+        ["run", "--unit", "invalid", "json", "--", "python", "-c", "pass"],
     )
     assert result.exit_code == 1
     assert "--unit must be one of" in result.output
@@ -606,7 +637,7 @@ def test_run_with_unit_auto():
 def test_info_messages_go_to_stderr():
     result = runner.invoke(
         app,
-        ["run", "json", "python", "-c", "import json; json.dumps(1)"],
+        ["run", "json", "--", "python", "-c", "import json; json.dumps(1)"],
     )
     assert result.exit_code == 0
     # Info messages should be on stderr, not stdout
@@ -700,13 +731,14 @@ def test_split_scopes_and_options_empty():
     assert opts == []
 
 
-def test_single_scope_without_separator_unchanged():
-    """Single scope without -- still works (backward compatible)."""
+def test_single_scope_requires_separator():
+    """Single scope without -- now errors."""
     result = runner.invoke(
         app,
         ["run", "json", "python", "-c", "import json; json.dumps(1)"],
     )
-    assert result.exit_code == 0
+    assert result.exit_code == 1
+    assert "Missing '--'" in result.output
 
 
 # --- module-level code profiling ---
@@ -746,3 +778,288 @@ def test_run_mixed_scope_package_and_script(tmp_path):
     # Both scopes should have results.
     assert "json." in result.output
     assert "<module>" in result.output
+
+
+# --- exclude flag ---
+
+
+def test_exclude_flag(tmp_path):
+    path = tmp_path / "results.json"
+    _write_sample_json(path)
+    result = runner.invoke(app, ["show", str(path), "--exclude", "*other*"])
+    assert result.exit_code == 0
+    assert "mod.func" in result.output
+    assert "mod.other" not in result.output
+
+
+def test_exclude_auto_wraps_bare_pattern(tmp_path):
+    path = tmp_path / "results.json"
+    _write_sample_json(path)
+    result = runner.invoke(app, ["show", str(path), "--exclude", "other"])
+    assert result.exit_code == 0
+    assert "mod.func" in result.output
+    assert "mod.other" not in result.output
+
+
+def test_exclude_all_shows_no_match(tmp_path):
+    path = tmp_path / "results.json"
+    _write_sample_json(path)
+    result = runner.invoke(app, ["show", str(path), "--exclude", "*mod*"])
+    assert result.exit_code == 0
+    assert "No functions matching" in result.output
+
+
+# --- sort flag ---
+
+
+def test_sort_by_name(tmp_path):
+    path = tmp_path / "results.json"
+    _write_sample_json(path)
+    result = runner.invoke(app, ["show", str(path), "--sort", "name", "--summary"])
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    func_lines = [ln for ln in lines if ln.strip().startswith("mod.")]
+    assert len(func_lines) == 2
+    # mod.func should come before mod.other alphabetically
+    assert func_lines[0].strip().startswith("mod.func")
+    assert func_lines[1].strip().startswith("mod.other")
+
+
+def test_sort_by_calls(tmp_path):
+    path = tmp_path / "results.json"
+    _write_sample_json(path)
+    result = runner.invoke(app, ["show", str(path), "--sort", "calls", "--summary"])
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    func_lines = [ln for ln in lines if ln.strip().startswith("mod.")]
+    # mod.func has 10 calls, mod.other has 1 — sorted by calls desc
+    assert func_lines[0].strip().startswith("mod.func")
+
+
+def test_sort_invalid_value():
+    result = runner.invoke(app, ["show", "/dev/null", "--sort", "invalid"])
+    assert result.exit_code == 1
+    assert "--sort must be one of" in result.output
+
+
+# --- no-subprocess / no-multiprocessing flags ---
+
+
+def test_no_subprocess_flag():
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--no-subprocess",
+            "json",
+            "--",
+            "python",
+            "-c",
+            "import json; json.dumps(1)",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Discovered" in result.output
+
+
+def test_no_multiprocessing_flag():
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--no-multiprocessing",
+            "json",
+            "--",
+            "python",
+            "-c",
+            "import json; json.dumps(1)",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Discovered" in result.output
+
+
+# --- run command: --sort validation ---
+
+
+def test_run_with_invalid_sort():
+    result = runner.invoke(
+        app,
+        ["run", "--sort", "invalid", "json", "--", "python", "-c", "pass"],
+    )
+    assert result.exit_code == 1
+    assert "--sort must be one of" in result.output
+
+
+def test_run_sort_after_scope():
+    """--sort between scope and -- should be reparsed."""
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "json",
+            "--sort",
+            "name",
+            "--",
+            "python",
+            "-c",
+            "import json; json.dumps(1)",
+        ],
+    )
+    assert result.exit_code == 0
+
+
+# --- show command: --unit and --sort validation ---
+
+
+def test_show_with_invalid_unit(tmp_path):
+    path = tmp_path / "results.json"
+    _write_sample_json(path)
+    result = runner.invoke(app, ["show", str(path), "--unit", "invalid"])
+    assert result.exit_code == 1
+    assert "--unit must be one of" in result.output
+
+
+def test_show_with_invalid_sort(tmp_path):
+    path = tmp_path / "results.json"
+    _write_sample_json(path)
+    result = runner.invoke(app, ["show", str(path), "--sort", "invalid"])
+    assert result.exit_code == 1
+    assert "--sort must be one of" in result.output
+
+
+# --- _reparse_options edge cases ---
+
+
+def test_reparse_bool_false_flags():
+    """--full and --no-memory should set their keys to False."""
+    result = _reparse_options(
+        ["--full", "--no-memory"],
+        _DisplayOptions(memory=True),
+    )
+    assert result.memory is False
+    assert result.compact is False
+
+
+def test_reparse_missing_value_error():
+    """A flag that requires a value but has none should error."""
+    import pytest
+    from click.exceptions import Exit
+
+    with pytest.raises(Exit):
+        _reparse_options(["--top"], _DisplayOptions())
+
+
+def test_reparse_invalid_top_value():
+    """Non-integer --top value should error."""
+    import pytest
+    from click.exceptions import Exit
+
+    with pytest.raises(Exit):
+        _reparse_options(["--top", "abc"], _DisplayOptions())
+
+
+def test_reparse_unrecognized_option():
+    """Unknown flag between scope and -- should error."""
+    import pytest
+    from click.exceptions import Exit
+
+    with pytest.raises(Exit):
+        _reparse_options(["--bogus"], _DisplayOptions())
+
+
+def test_reparse_output_flag():
+    """--output / -o should set the output path."""
+    result = _reparse_options(["-o", "/tmp/out.json"], _DisplayOptions())
+    assert result.output == Path("/tmp/out.json")
+
+
+def test_reparse_exclude_and_sort():
+    """--exclude and --sort should be parsed from inter-scope tokens."""
+    result = _reparse_options(
+        ["--exclude", "*foo*", "--sort", "calls"], _DisplayOptions()
+    )
+    assert result.exclude_pattern == "*foo*"
+    assert result.sort == "calls"
+
+
+def test_reparse_no_subprocess_no_multiprocessing():
+    """--no-subprocess and --no-multiprocessing should set their flags."""
+    result = _reparse_options(
+        ["--no-subprocess", "--no-multiprocessing"], _DisplayOptions()
+    )
+    assert result.no_subprocess is True
+    assert result.no_multiprocessing is True
+
+
+# --- exclude via run command (end-to-end) ---
+
+
+def test_run_exclude_flag():
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--exclude",
+            "encoder",
+            "json",
+            "--",
+            "python",
+            "-c",
+            "import json; json.dumps(1)",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "encoder" not in result.output.lower() or "Discovered" in result.output
+
+
+# --- sort via run command (end-to-end) ---
+
+
+def test_run_sort_by_time_per_call(tmp_path):
+    path = tmp_path / "results.json"
+    _write_sample_json(path)
+    result = runner.invoke(
+        app, ["show", str(path), "--sort", "time-per-call", "--summary"]
+    )
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    func_lines = [ln for ln in lines if ln.strip().startswith("mod.")]
+    # mod.other has 0.1/1=0.1 tpc, mod.func has 0.5/10=0.05 tpc
+    # sorted desc by tpc → mod.other first
+    assert func_lines[0].strip().startswith("mod.other")
+
+
+# --- filter + exclude combined ---
+
+
+def test_filter_and_exclude_combined(tmp_path):
+    """Filter includes, then exclude removes from the filtered set."""
+    path = tmp_path / "results.json"
+    _write_sample_json(path)
+    result = runner.invoke(
+        app, ["show", str(path), "--filter", "*mod*", "--exclude", "*other*"]
+    )
+    assert result.exit_code == 0
+    assert "mod.func" in result.output
+    assert "mod.other" not in result.output
+
+
+# --- exclude after scope before separator ---
+
+
+def test_exclude_after_scope_before_separator():
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "json",
+            "--exclude",
+            "encoder",
+            "--",
+            "python",
+            "-c",
+            "import json; json.dumps(1)",
+        ],
+    )
+    assert result.exit_code == 0

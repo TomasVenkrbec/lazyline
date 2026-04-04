@@ -4,6 +4,7 @@ import linecache
 from lazyline.models import FunctionProfile, LineProfile
 from lazyline.reporting import (
     _format_memory,
+    _normalize_patterns,
     _qualified_name,
     _shorten_path,
     print_summary,
@@ -1427,3 +1428,286 @@ def test_fallback_without_pygments():
     assert "x = 1" in output
     # Should not have Pygments 256-color ANSI
     assert "\x1b[38;5;" not in output
+
+
+# --- _normalize_patterns tests ---
+
+
+def test_normalize_patterns_bare_words():
+    """Bare patterns without wildcards get auto-wrapped with *...*."""
+    result = _normalize_patterns("dumps,loads")
+    assert result == ["*dumps*", "*loads*"]
+
+
+def test_normalize_patterns_preserves_wildcards():
+    """Patterns with wildcards are left unchanged."""
+    result = _normalize_patterns("*foo*,bar[0-9],baz?")
+    assert result == ["*foo*", "bar[0-9]", "baz?"]
+
+
+def test_normalize_patterns_mixed():
+    """Mix of bare and wildcard patterns."""
+    result = _normalize_patterns("plain,*wild*")
+    assert result == ["*plain*", "*wild*"]
+
+
+def test_normalize_patterns_strips_whitespace():
+    """Whitespace around comma-separated patterns is trimmed."""
+    result = _normalize_patterns("  foo , bar  ")
+    assert result == ["*foo*", "*bar*"]
+
+
+# --- exclude pattern tests (reporting layer) ---
+
+
+def test_exclude_pattern_reporting():
+    """Exclude pattern removes matching functions from output."""
+    r1 = _result_with_time(total_time=1.0)
+    r2 = FunctionProfile(
+        module="mod",
+        name="helper",
+        filename="/fake/mod.py",
+        start_line=5,
+        total_time=0.1,
+        call_count=1,
+        lines=[LineProfile(lineno=5, hits=1, time=0.1, source="pass")],
+    )
+    stream = io.StringIO()
+    print_summary([r1, r2], stream=stream, exclude_pattern="*helper*")
+    output = stream.getvalue()
+    assert "mod.func" in output
+    assert "mod.helper" not in output
+
+
+def test_exclude_all_functions_shows_no_match():
+    stream = io.StringIO()
+    print_summary([_result_with_time()], stream=stream, exclude_pattern="*func*")
+    output = stream.getvalue()
+    assert "No functions matching" in output
+
+
+# --- sort tests (reporting layer) ---
+
+
+def test_sort_by_name_reporting():
+    r1 = FunctionProfile(
+        module="mod",
+        name="zebra",
+        filename="/fake/mod.py",
+        start_line=1,
+        total_time=2.0,
+        call_count=1,
+        lines=[LineProfile(lineno=1, hits=1, time=2.0, source="pass")],
+    )
+    r2 = FunctionProfile(
+        module="mod",
+        name="alpha",
+        filename="/fake/mod.py",
+        start_line=5,
+        total_time=1.0,
+        call_count=1,
+        lines=[LineProfile(lineno=5, hits=1, time=1.0, source="pass")],
+    )
+    stream = io.StringIO()
+    print_summary([r1, r2], stream=stream, sort="name", summary=True)
+    lines = stream.getvalue().splitlines()
+    func_lines = [ln for ln in lines if ln.strip().startswith("mod.")]
+    assert func_lines[0].strip().startswith("mod.alpha")
+    assert func_lines[1].strip().startswith("mod.zebra")
+
+
+def test_sort_by_calls_reporting():
+    r1 = FunctionProfile(
+        module="mod",
+        name="few_calls",
+        filename="/fake/mod.py",
+        start_line=1,
+        total_time=2.0,
+        call_count=5,
+        lines=[LineProfile(lineno=1, hits=5, time=2.0, source="pass")],
+    )
+    r2 = FunctionProfile(
+        module="mod",
+        name="many_calls",
+        filename="/fake/mod.py",
+        start_line=5,
+        total_time=1.0,
+        call_count=100,
+        lines=[LineProfile(lineno=5, hits=100, time=1.0, source="pass")],
+    )
+    stream = io.StringIO()
+    print_summary([r1, r2], stream=stream, sort="calls", summary=True)
+    lines = stream.getvalue().splitlines()
+    func_lines = [ln for ln in lines if ln.strip().startswith("mod.")]
+    # Sorted by calls desc → many_calls first
+    assert func_lines[0].strip().startswith("mod.many_calls")
+
+
+def test_sort_by_time_per_call_reporting():
+    r1 = FunctionProfile(
+        module="mod",
+        name="cheap",
+        filename="/fake/mod.py",
+        start_line=1,
+        total_time=1.0,
+        call_count=100,
+        lines=[LineProfile(lineno=1, hits=100, time=1.0, source="pass")],
+    )
+    r2 = FunctionProfile(
+        module="mod",
+        name="expensive",
+        filename="/fake/mod.py",
+        start_line=5,
+        total_time=0.5,
+        call_count=1,
+        lines=[LineProfile(lineno=5, hits=1, time=0.5, source="pass")],
+    )
+    stream = io.StringIO()
+    print_summary([r1, r2], stream=stream, sort="time-per-call", summary=True)
+    lines = stream.getvalue().splitlines()
+    func_lines = [ln for ln in lines if ln.strip().startswith("mod.")]
+    # expensive: 0.5/1=0.5 tpc, cheap: 1.0/100=0.01 tpc → expensive first
+    assert func_lines[0].strip().startswith("mod.expensive")
+
+
+def test_sort_time_is_default_order():
+    """Default sort (time) should keep original descending-time order."""
+    r1 = _result_with_time(total_time=2.0)
+    r2 = FunctionProfile(
+        module="mod",
+        name="slower",
+        filename="/fake/mod.py",
+        start_line=5,
+        total_time=5.0,
+        call_count=1,
+        lines=[LineProfile(lineno=5, hits=1, time=5.0, source="pass")],
+    )
+    # Pass r1 first (lower time) — sort=time should not reorder since
+    # the code skips sorting for "time" (results are pre-sorted)
+    stream = io.StringIO()
+    print_summary([r1, r2], stream=stream, sort="time", summary=True)
+    lines = stream.getvalue().splitlines()
+    func_lines = [ln for ln in lines if ln.strip().startswith("mod.")]
+    # Original order preserved: mod.func (r1) first, mod.slower (r2) second
+    assert func_lines[0].strip().startswith("mod.func")
+
+
+# --- profiled time label ---
+
+
+def test_profiled_time_label_when_total_less_than_wall():
+    """When profiled time << wall time, label should say 'Profiled time'."""
+    stream = io.StringIO()
+    # total=0.1s, wall=10s → ratio=0.01, well outside 0.9-1.1
+    print_summary(
+        [_result_with_time(total_time=0.1)],
+        stream=stream,
+        scope="pkg",
+        wall_time=10.0,
+        unit="s",
+    )
+    output = stream.getvalue()
+    assert "Profiled time:" in output
+    assert "Total:" not in output.split("Summary")[0]
+
+
+def test_profiled_time_label_when_total_much_greater_than_wall():
+    """When total >> wall (parallel workers), label should say 'Profiled time'."""
+    stream = io.StringIO()
+    print_summary(
+        [_result_with_time(total_time=100.0)],
+        stream=stream,
+        scope="pkg",
+        wall_time=30.0,
+        unit="s",
+    )
+    output = stream.getvalue()
+    assert "Profiled time:" in output
+
+
+def test_total_label_when_times_close():
+    """When total ≈ wall time, label should say 'Total'."""
+    stream = io.StringIO()
+    print_summary(
+        [_result_with_time(total_time=10.0)],
+        stream=stream,
+        scope="pkg",
+        wall_time=10.5,
+        unit="s",
+    )
+    output = stream.getvalue()
+    header_part = output.split("Summary")[0]
+    assert "Total:" in header_part
+
+
+# --- un-profiled code hint ---
+
+
+def test_unprofiled_code_hint():
+    """When profiled time << wall time (< 0.5x), show un-profiled code hint."""
+    stream = io.StringIO()
+    print_summary(
+        [_result_with_time(total_time=1.0)],
+        stream=stream,
+        scope="pkg",
+        wall_time=10.0,
+    )
+    output = stream.getvalue()
+    assert "un-profiled code" in output
+
+
+def test_no_unprofiled_hint_when_times_close():
+    stream = io.StringIO()
+    print_summary(
+        [_result_with_time(total_time=10.0)],
+        stream=stream,
+        scope="pkg",
+        wall_time=12.0,
+    )
+    output = stream.getvalue()
+    assert "un-profiled code" not in output
+
+
+# --- filter + exclude "No functions matching" label ---
+
+
+def test_print_summary_invalid_sort_raises():
+    import pytest
+
+    with pytest.raises(ValueError, match="sort must be one of"):
+        print_summary([_result_with_time()], sort="invalid")
+
+    stream = io.StringIO()
+    print_summary(
+        [_result_with_time()],
+        stream=stream,
+        filter_pattern="*nonexistent*",
+    )
+    output = stream.getvalue()
+    assert "No functions matching '*nonexistent*'" in output
+
+
+def test_exclude_no_match_shows_pattern():
+    stream = io.StringIO()
+    print_summary(
+        [_result_with_time()],
+        stream=stream,
+        exclude_pattern="*func*",
+    )
+    output = stream.getvalue()
+    assert "No functions matching '*func*'" in output
+
+
+def test_filter_and_exclude_empty_shows_exclude_pattern():
+    """When filter matches but exclude removes all, message blames exclude."""
+    stream = io.StringIO()
+    print_summary(
+        [_result_with_time()],
+        stream=stream,
+        filter_pattern="*func*",
+        exclude_pattern="*func*",
+    )
+    output = stream.getvalue()
+    # The exclude pattern caused the empty result, not the filter.
+    assert "No functions matching '*func*'" in output
+    assert "nonexistent" not in output

@@ -171,23 +171,60 @@ def _warn_negative_times(results: list[FunctionProfile]) -> None:
     )
 
 
+def _normalize_patterns(raw: str) -> list[str]:
+    """Split comma-separated patterns and auto-wrap bare ones with ``*...*``."""
+    patterns = [p.strip() for p in raw.split(",")]
+    return [f"*{p}*" if not any(c in p for c in "*?[]") else p for p in patterns]
+
+
+_SORT_KEYS: Final = {
+    "time": lambda fp: -fp.total_time,
+    "calls": lambda fp: -fp.call_count,
+    "time-per-call": lambda fp: (
+        -(fp.total_time / fp.call_count if fp.call_count else 0)
+    ),
+    "name": lambda fp: f"{fp.module}.{fp.name}",
+}
+
+
 def _filter_and_select(
     results: list[FunctionProfile],
     filter_pattern: str | None,
+    exclude_pattern: str | None,
     top: int | None,
-) -> tuple[list[FunctionProfile] | None, list[FunctionProfile]]:
-    """Apply filter and top-N selection, returning (filtered, display)."""
+    sort: str = "time",
+) -> tuple[list[FunctionProfile] | None, list[FunctionProfile], str]:
+    """Apply filter, exclude, sort, and top-N selection.
+
+    Returns
+    -------
+    tuple
+        (filtered_results, display_results, empty_label) — *empty_label* is
+        the pattern string to show in the "No functions matching" message
+        when *filtered_results* is ``None``.
+    """
     if filter_pattern is not None:
-        patterns = [p.strip() for p in filter_pattern.split(",")]
+        patterns = _normalize_patterns(filter_pattern)
         results = [
             fp
             for fp in results
             if any(fnmatch.fnmatch(f"{fp.module}.{fp.name}", p) for p in patterns)
         ]
         if not results:
-            return None, []
+            return None, [], filter_pattern
+    if exclude_pattern is not None:
+        patterns = _normalize_patterns(exclude_pattern)
+        results = [
+            fp
+            for fp in results
+            if not any(fnmatch.fnmatch(f"{fp.module}.{fp.name}", p) for p in patterns)
+        ]
+        if not results:
+            return None, [], exclude_pattern
+    if sort != "time":
+        results = sorted(results, key=_SORT_KEYS[sort])
     display = results[:top] if top is not None else results
-    return results, display
+    return results, display, ""
 
 
 def _print_header_block(
@@ -210,6 +247,12 @@ def _print_header_block(
     total_str = (
         f"{grand_total * tu.multiplier:.{tu.total_prec}f}"[:_MAX_NUM_WIDTH] + tu.label
     )
+    # Use "Profiled time" when total differs significantly from wall time.
+    if wall_time is not None and wall_time > 0:
+        ratio = grand_total / wall_time
+        total_label = "Total" if 0.9 <= ratio <= 1.1 else "Profiled time"
+    else:
+        total_label = "Total"
     unit_str = f"{tu.label} (auto)" if unit == "auto" else tu.label
     prefix = "\U0001f525 " if is_tty else ""
     print(f"  {prefix}Lazyline results for {scope}", file=stream)
@@ -221,10 +264,25 @@ def _print_header_block(
     else:
         wall_str = ""
     print(
-        f"  {coverage} | Total: {total_str}{wall_str} | Unit: {unit_str}", file=stream
+        f"  {coverage} | {total_label}: {total_str}{wall_str} | Unit: {unit_str}",
+        file=stream,
     )
     if wall_time is not None and wall_time > 0 and grand_total > wall_time * 1.5:
         print("  (total includes parallel worker time)", file=stream)
+    elif wall_time is not None and wall_time > 0 and grand_total < wall_time * 0.5:
+        print(
+            "  (most time was spent in un-profiled code"
+            " — C extensions, un-scoped modules)",
+            file=stream,
+        )
+
+
+def _validate_print_options(unit: str, sort: str) -> None:
+    """Validate unit and sort parameters for ``print_summary``."""
+    if unit != "auto" and unit not in _UNITS:
+        raise ValueError("unit must be one of: s, ms, us, ns or 'auto'")
+    if sort not in _SORT_KEYS:
+        raise ValueError(f"sort must be one of: {', '.join(_SORT_KEYS)} or omitted")
 
 
 def print_summary(
@@ -234,9 +292,11 @@ def print_summary(
     compact: bool = True,
     summary: bool = False,
     filter_pattern: str | None = None,
+    exclude_pattern: str | None = None,
     stream: TextIO | None = None,
     width: int | None = None,
     unit: str = "auto",
+    sort: str = "time",
     scope: str | None = None,
     n_registered: int | None = None,
     wall_time: float | None = None,
@@ -256,12 +316,16 @@ def print_summary(
     filter_pattern
         If set, only show functions whose qualified name matches
         the given fnmatch pattern (e.g., ``"*Matcher*"``).
+    exclude_pattern
+        If set, exclude functions whose qualified name matches.
     stream
         Output stream. Defaults to ``sys.stdout``.
     width
         Terminal width override. Auto-detected when ``None``.
     unit
         Time display unit: ``"s"``, ``"ms"``, ``"us"``, ``"ns"``, or ``"auto"``.
+    sort
+        Sort order: ``"time"``, ``"calls"``, ``"time-per-call"``, or ``"name"``.
     scope
         Scope name for the results header block. When ``None``, no header is shown.
     n_registered
@@ -269,8 +333,7 @@ def print_summary(
     wall_time
         Wall-clock execution time in seconds, displayed in the header.
     """
-    if unit != "auto" and unit not in _UNITS:
-        raise ValueError(f"unit must be one of: {', '.join(sorted(_UNITS))} or 'auto'")
+    _validate_print_options(unit, sort)
 
     stream = stream or sys.stdout
 
@@ -297,9 +360,11 @@ def print_summary(
     grand_total = sum(fp.total_time for fp in results)
     n_called = len(results)
 
-    filtered, display = _filter_and_select(results, filter_pattern, top)
+    filtered, display, empty_label = _filter_and_select(
+        results, filter_pattern, exclude_pattern, top, sort
+    )
     if filtered is None:
-        print(f"No functions matching '{filter_pattern}'.", file=stream)
+        print(f"No functions matching '{empty_label}'.", file=stream)
         return
     results = filtered
     show_memory = any(fp.memory is not None for fp in results)
