@@ -177,7 +177,7 @@ def _normalize_patterns(raw: str) -> list[str]:
     return [f"*{p}*" if not any(c in p for c in "*?[]") else p for p in patterns]
 
 
-_SORT_KEYS = {
+_SORT_KEYS: Final = {
     "time": lambda fp: -fp.total_time,
     "calls": lambda fp: -fp.call_count,
     "time-per-call": lambda fp: (
@@ -193,8 +193,16 @@ def _filter_and_select(
     exclude_pattern: str | None,
     top: int | None,
     sort: str = "time",
-) -> tuple[list[FunctionProfile] | None, list[FunctionProfile]]:
-    """Apply filter, exclude, sort, and top-N selection."""
+) -> tuple[list[FunctionProfile] | None, list[FunctionProfile], str]:
+    """Apply filter, exclude, sort, and top-N selection.
+
+    Returns
+    -------
+    tuple
+        (filtered_results, display_results, empty_label) — *empty_label* is
+        the pattern string to show in the "No functions matching" message
+        when *filtered_results* is ``None``.
+    """
     if filter_pattern is not None:
         patterns = _normalize_patterns(filter_pattern)
         results = [
@@ -203,7 +211,7 @@ def _filter_and_select(
             if any(fnmatch.fnmatch(f"{fp.module}.{fp.name}", p) for p in patterns)
         ]
         if not results:
-            return None, []
+            return None, [], filter_pattern
     if exclude_pattern is not None:
         patterns = _normalize_patterns(exclude_pattern)
         results = [
@@ -212,11 +220,11 @@ def _filter_and_select(
             if not any(fnmatch.fnmatch(f"{fp.module}.{fp.name}", p) for p in patterns)
         ]
         if not results:
-            return None, []
+            return None, [], exclude_pattern
     if sort != "time":
         results = sorted(results, key=_SORT_KEYS[sort])
     display = results[:top] if top is not None else results
-    return results, display
+    return results, display, ""
 
 
 def _print_header_block(
@@ -269,6 +277,14 @@ def _print_header_block(
         )
 
 
+def _validate_print_options(unit: str, sort: str) -> None:
+    """Validate unit and sort parameters for ``print_summary``."""
+    if unit != "auto" and unit not in _UNITS:
+        raise ValueError("unit must be one of: s, ms, us, ns or 'auto'")
+    if sort not in _SORT_KEYS:
+        raise ValueError(f"sort must be one of: {', '.join(_SORT_KEYS)} or omitted")
+
+
 def print_summary(
     results: list[FunctionProfile],
     *,
@@ -317,8 +333,7 @@ def print_summary(
     wall_time
         Wall-clock execution time in seconds, displayed in the header.
     """
-    if unit != "auto" and unit not in _UNITS:
-        raise ValueError("unit must be one of: s, ms, us, ns or 'auto'")
+    _validate_print_options(unit, sort)
 
     stream = stream or sys.stdout
 
@@ -345,12 +360,11 @@ def print_summary(
     grand_total = sum(fp.total_time for fp in results)
     n_called = len(results)
 
-    filtered, display = _filter_and_select(
+    filtered, display, empty_label = _filter_and_select(
         results, filter_pattern, exclude_pattern, top, sort
     )
     if filtered is None:
-        label = filter_pattern or exclude_pattern
-        print(f"No functions matching '{label}'.", file=stream)
+        print(f"No functions matching '{empty_label}'.", file=stream)
         return
     results = filtered
     show_memory = any(fp.memory is not None for fp in results)

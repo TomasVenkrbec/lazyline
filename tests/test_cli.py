@@ -1,8 +1,10 @@
 import json
+from pathlib import Path
 
 from typer.testing import CliRunner
 
 from lazyline.__main__ import (
+    _DisplayOptions,
     _reparse_options,
     _split_scopes_and_options,
     _warn_high_hit_functions,
@@ -933,19 +935,10 @@ def test_reparse_bool_false_flags():
     """--full and --no-memory should set their keys to False."""
     result = _reparse_options(
         ["--full", "--no-memory"],
-        top=None,
-        output=None,
-        memory=True,
-        compact=True,
-        summary=False,
-        quiet=False,
-        filter_pattern=None,
-        unit="auto",
+        _DisplayOptions(memory=True),
     )
-    # result is a 12-tuple: top, output, memory, compact, summary, quiet,
-    # filter_pattern, unit, exclude_pattern, sort, no_subprocess, no_multiprocessing
-    assert result[2] is False  # memory
-    assert result[3] is False  # compact
+    assert result.memory is False
+    assert result.compact is False
 
 
 def test_reparse_missing_value_error():
@@ -954,17 +947,7 @@ def test_reparse_missing_value_error():
     from click.exceptions import Exit
 
     with pytest.raises(Exit):
-        _reparse_options(
-            ["--top"],
-            top=None,
-            output=None,
-            memory=False,
-            compact=True,
-            summary=False,
-            quiet=False,
-            filter_pattern=None,
-            unit="auto",
-        )
+        _reparse_options(["--top"], _DisplayOptions())
 
 
 def test_reparse_invalid_top_value():
@@ -973,17 +956,7 @@ def test_reparse_invalid_top_value():
     from click.exceptions import Exit
 
     with pytest.raises(Exit):
-        _reparse_options(
-            ["--top", "abc"],
-            top=None,
-            output=None,
-            memory=False,
-            compact=True,
-            summary=False,
-            quiet=False,
-            filter_pattern=None,
-            unit="auto",
-        )
+        _reparse_options(["--top", "abc"], _DisplayOptions())
 
 
 def test_reparse_unrecognized_option():
@@ -992,69 +965,31 @@ def test_reparse_unrecognized_option():
     from click.exceptions import Exit
 
     with pytest.raises(Exit):
-        _reparse_options(
-            ["--bogus"],
-            top=None,
-            output=None,
-            memory=False,
-            compact=True,
-            summary=False,
-            quiet=False,
-            filter_pattern=None,
-            unit="auto",
-        )
+        _reparse_options(["--bogus"], _DisplayOptions())
 
 
 def test_reparse_output_flag():
     """--output / -o should set the output path."""
-    result = _reparse_options(
-        ["-o", "/tmp/out.json"],
-        top=None,
-        output=None,
-        memory=False,
-        compact=True,
-        summary=False,
-        quiet=False,
-        filter_pattern=None,
-        unit="auto",
-    )
-    from pathlib import Path
-
-    assert result[1] == Path("/tmp/out.json")
+    result = _reparse_options(["-o", "/tmp/out.json"], _DisplayOptions())
+    assert result.output == Path("/tmp/out.json")
 
 
 def test_reparse_exclude_and_sort():
     """--exclude and --sort should be parsed from inter-scope tokens."""
     result = _reparse_options(
-        ["--exclude", "*foo*", "--sort", "calls"],
-        top=None,
-        output=None,
-        memory=False,
-        compact=True,
-        summary=False,
-        quiet=False,
-        filter_pattern=None,
-        unit="auto",
+        ["--exclude", "*foo*", "--sort", "calls"], _DisplayOptions()
     )
-    assert result[8] == "*foo*"  # exclude_pattern
-    assert result[9] == "calls"  # sort
+    assert result.exclude_pattern == "*foo*"
+    assert result.sort == "calls"
 
 
 def test_reparse_no_subprocess_no_multiprocessing():
     """--no-subprocess and --no-multiprocessing should set their flags."""
     result = _reparse_options(
-        ["--no-subprocess", "--no-multiprocessing"],
-        top=None,
-        output=None,
-        memory=False,
-        compact=True,
-        summary=False,
-        quiet=False,
-        filter_pattern=None,
-        unit="auto",
+        ["--no-subprocess", "--no-multiprocessing"], _DisplayOptions()
     )
-    assert result[10] is True  # no_subprocess
-    assert result[11] is True  # no_multiprocessing
+    assert result.no_subprocess is True
+    assert result.no_multiprocessing is True
 
 
 # --- exclude via run command (end-to-end) ---

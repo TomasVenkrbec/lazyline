@@ -44,12 +44,12 @@ def discover_modules(scope: str) -> list[types.ModuleType]:
         file_path = Path(scope)
         if file_path.is_file():
             return _import_from_file(file_path)
-        logger.debug("File not found: '%s'.", scope)
+        logger.warning("File not found: '%s'.", scope)
         return []
 
     module_name = _resolve_module_name(scope)
     if not _is_valid_module_name(module_name):
-        logger.debug("Invalid scope '%s' (resolved to '%s').", scope, module_name)
+        logger.warning("Invalid scope '%s' (resolved to '%s').", scope, module_name)
         return []
     return _import_module_tree(module_name)
 
@@ -153,7 +153,7 @@ def _import_module_tree(module_name: str) -> list[types.ModuleType]:
     try:
         root = importlib.import_module(module_name)
     except (ImportError, ValueError, TypeError):
-        logger.debug("Could not import module '%s'.", module_name)
+        logger.warning("Could not import module '%s'.", module_name)
         return modules
 
     modules.append(root)

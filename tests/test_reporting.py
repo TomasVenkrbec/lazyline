@@ -1671,7 +1671,12 @@ def test_no_unprofiled_hint_when_times_close():
 # --- filter + exclude "No functions matching" label ---
 
 
-def test_filter_no_match_shows_pattern():
+def test_print_summary_invalid_sort_raises():
+    import pytest
+
+    with pytest.raises(ValueError, match="sort must be one of"):
+        print_summary([_result_with_time()], sort="invalid")
+
     stream = io.StringIO()
     print_summary(
         [_result_with_time()],
@@ -1691,3 +1696,18 @@ def test_exclude_no_match_shows_pattern():
     )
     output = stream.getvalue()
     assert "No functions matching '*func*'" in output
+
+
+def test_filter_and_exclude_empty_shows_exclude_pattern():
+    """When filter matches but exclude removes all, message blames exclude."""
+    stream = io.StringIO()
+    print_summary(
+        [_result_with_time()],
+        stream=stream,
+        filter_pattern="*func*",
+        exclude_pattern="*func*",
+    )
+    output = stream.getvalue()
+    # The exclude pattern caused the empty result, not the filter.
+    assert "No functions matching '*func*'" in output
+    assert "nonexistent" not in output
