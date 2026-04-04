@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import platform
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Final
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple
 
 if TYPE_CHECKING:
     import types
@@ -35,6 +36,28 @@ from lazyline.subproc import subprocess_hooks
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
 
+class _DisplayOptions(NamedTuple):
+    """All CLI options that control display, output, and profiling behavior.
+
+    NamedTuple so that existing callers using positional indexing (e.g.,
+    ``result[2]``) continue to work while new code can use named access
+    (e.g., ``opts.memory``).
+    """
+
+    top: int | None
+    output: Path | None
+    memory: bool
+    compact: bool
+    summary: bool
+    quiet: bool
+    filter_pattern: str | None
+    unit: str
+    exclude_pattern: str | None
+    sort: str
+    no_subprocess: bool
+    no_multiprocessing: bool
+
+
 @app.callback(invoke_without_command=True)
 def main(
     version: Annotated[
@@ -54,7 +77,10 @@ def main(
 def run(
     ctx: typer.Context,
     scope: Annotated[
-        str, typer.Argument(help="Package path, module name, or directory to profile")
+        str,
+        typer.Argument(
+            help="Package path, module name, directory, or .py file to profile"
+        ),
     ],
     top: Annotated[
         int | None,
@@ -82,24 +108,50 @@ def run(
     ] = False,
     quiet: Annotated[
         bool,
-        typer.Option("--quiet", "-q", help="Suppress informational messages"),
+        typer.Option(
+            "--quiet", "-q", help="Suppress discovery and registration messages"
+        ),
     ] = False,
     filter_pattern: Annotated[
         str | None,
         typer.Option(
-            "-f", "--filter", help="Only show functions matching this fnmatch pattern"
+            "-f",
+            "--filter",
+            help="Only show functions matching fnmatch pattern(s) (comma-separated)",
         ),
     ] = None,
     unit: Annotated[
         str,
         typer.Option("--unit", help="Time unit: auto, s, ms, us, or ns"),
     ] = "auto",
+    exclude_pattern: Annotated[
+        str | None,
+        typer.Option(
+            "-e",
+            "--exclude",
+            help="Exclude functions matching fnmatch pattern(s) (comma-separated)",
+        ),
+    ] = None,
+    sort: Annotated[
+        str,
+        typer.Option(
+            "--sort", help="Sort by: time (default), calls, time-per-call, name"
+        ),
+    ] = "time",
+    no_subprocess: Annotated[
+        bool,
+        typer.Option("--no-subprocess", help="Disable subprocess profiling injection"),
+    ] = False,
+    no_multiprocessing: Annotated[
+        bool,
+        typer.Option(
+            "--no-multiprocessing", help="Disable multiprocessing worker profiling"
+        ),
+    ] = False,
 ) -> None:
     """Profile a command, instrumenting all functions in the given scope(s).
 
-    Multiple scopes require the -- separator before the command.
-
-    Usage: lazyline run [OPTIONS] SCOPE [SCOPE...] [--] COMMAND [ARGS]
+    Usage: lazyline run [OPTIONS] SCOPE [SCOPE...] -- COMMAND [ARGS]
 
     Examples
     --------
@@ -111,29 +163,35 @@ def run(
     raw_args = list(ctx.args)
     scopes = [scope]
 
-    # When args contain --, tokens before it are additional scopes or options.
-    if "--" in raw_args:
-        sep_idx = raw_args.index("--")
-        pre, post = raw_args[:sep_idx], raw_args[sep_idx + 1 :]
-        extra_scopes, options = _split_scopes_and_options(pre)
-        scopes.extend(extra_scopes)
-        top, output, memory, compact, summary, quiet, filter_pattern, unit = (
-            _reparse_options(
-                options,
-                top,
-                output,
-                memory,
-                compact,
-                summary,
-                quiet,
-                filter_pattern,
-                unit,
-            )
+    if "--" not in raw_args:
+        typer.echo(
+            "Error: Missing '--' separator between SCOPE and COMMAND.\n"
+            "Usage: lazyline run [OPTIONS] SCOPE [SCOPE...] -- COMMAND [ARGS...]\n"
+            f'Example: lazyline run {scope} -- python -c "pass"',
+            err=True,
         )
-        command = post
-    else:
-        command = raw_args
-        _check_misplaced_flags(command)
+        raise typer.Exit(code=1)
+
+    sep_idx = raw_args.index("--")
+    pre, post = raw_args[:sep_idx], raw_args[sep_idx + 1 :]
+    extra_scopes, options = _split_scopes_and_options(pre)
+    scopes.extend(extra_scopes)
+    opts = _reparse_options(
+        options,
+        top,
+        output,
+        memory,
+        compact,
+        summary,
+        quiet,
+        filter_pattern,
+        unit,
+        exclude_pattern,
+        sort,
+        no_subprocess,
+        no_multiprocessing,
+    )
+    command = post
 
     scope_label = ", ".join(scopes)
 
@@ -145,49 +203,52 @@ def run(
         )
         raise typer.Exit(code=1)
 
-    if top is not None and top < 1:
-        typer.echo("Error: --top must be at least 1.", err=True)
-        raise typer.Exit(code=1)
-    if unit not in _VALID_UNITS:
-        typer.echo(
-            f"Error: --unit must be one of: {', '.join(sorted(_VALID_UNITS))}.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
+    _validate_display_options(opts)
 
     results, exit_code, n_registered, wall_time = _profile(
-        scopes, command, memory, quiet
+        scopes,
+        command,
+        opts.memory,
+        opts.quiet,
+        opts.no_subprocess,
+        opts.no_multiprocessing,
     )
+    if n_registered > 50 and opts.top is None and not opts.quiet:
+        typer.echo("Tip: use --top N to limit output.", err=True)
     # When writing JSON to stdout, redirect the human report to stderr
     # so stdout contains clean JSON for piping.
     report_stream = (
-        sys.stderr if output is not None and str(output) == _STDOUT_PATH else None
+        sys.stderr
+        if opts.output is not None and str(opts.output) == _STDOUT_PATH
+        else None
     )
     print_summary(
         results,
-        top=top,
-        compact=compact,
-        summary=summary,
-        filter_pattern=filter_pattern,
-        unit=unit,
+        top=opts.top,
+        compact=opts.compact,
+        summary=opts.summary,
+        filter_pattern=opts.filter_pattern,
+        exclude_pattern=opts.exclude_pattern,
+        unit=opts.unit,
+        sort=opts.sort,
         scope=scope_label,
         n_registered=n_registered,
         wall_time=wall_time,
         stream=report_stream,
     )
 
-    if output is not None:
-        if str(output) != _STDOUT_PATH and output.is_dir():
-            typer.echo(f"Error: --output '{output}' is a directory.", err=True)
+    if opts.output is not None:
+        if str(opts.output) != _STDOUT_PATH and opts.output.is_dir():
+            typer.echo(f"Error: --output '{opts.output}' is a directory.", err=True)
             raise typer.Exit(code=1)
         _export_results(
-            output,
+            opts.output,
             results,
             command,
             scope_label,
-            memory,
+            opts.memory,
             exit_code,
-            quiet,
+            opts.quiet,
             n_registered,
             wall_time,
         )
@@ -213,6 +274,8 @@ def _profile(
     command: list[str],
     memory: bool,
     quiet: bool,
+    no_subprocess: bool = False,
+    no_multiprocessing: bool = False,
 ) -> tuple[list[FunctionProfile], int, int, float]:
     """Run the profiling pipeline: discover, register, execute, collect."""
     modules = _discover_all(scopes)
@@ -241,11 +304,20 @@ def _profile(
     module_names = [m.__name__ for m in modules]
     if not quiet:
         typer.echo("", err=True)
+
+    sub_ctx = (
+        contextlib.nullcontext(_NullHolder())
+        if no_subprocess
+        else subprocess_hooks(scopes)
+    )
+    mp_ctx = (
+        contextlib.nullcontext(_NullHolder())
+        if no_multiprocessing
+        else profiling_hooks(module_names, parent_profiler=profiler)
+    )
+
     wall_start = time.monotonic()
-    with (
-        subprocess_hooks(scopes) as sub_holder,
-        profiling_hooks(module_names, parent_profiler=profiler) as worker_holder,
-    ):
+    with sub_ctx as sub_holder, mp_ctx as worker_holder:
         exit_code = execute_command(profiler, command)
     wall_time = time.monotonic() - wall_start
 
@@ -327,17 +399,35 @@ def show(
     filter_pattern: Annotated[
         str | None,
         typer.Option(
-            "-f", "--filter", help="Only show functions matching this fnmatch pattern"
+            "-f",
+            "--filter",
+            help="Only show functions matching fnmatch pattern(s) (comma-separated)",
         ),
     ] = None,
     quiet: Annotated[
         bool,
-        typer.Option("--quiet", "-q", help="Suppress informational messages"),
+        typer.Option(
+            "--quiet", "-q", help="Suppress discovery and registration messages"
+        ),
     ] = False,
     unit: Annotated[
         str,
         typer.Option("--unit", help="Time unit: auto, s, ms, us, or ns"),
     ] = "auto",
+    exclude_pattern: Annotated[
+        str | None,
+        typer.Option(
+            "-e",
+            "--exclude",
+            help="Exclude functions matching fnmatch pattern(s) (comma-separated)",
+        ),
+    ] = None,
+    sort: Annotated[
+        str,
+        typer.Option(
+            "--sort", help="Sort by: time (default), calls, time-per-call, name"
+        ),
+    ] = "time",
 ) -> None:
     """Display profiling results from a saved JSON file.
 
@@ -348,15 +438,21 @@ def show(
       lazyline show results.json --summary --unit ms
       lazyline show results.json --full
     """
-    if top is not None and top < 1:
-        typer.echo("Error: --top must be at least 1.", err=True)
-        raise typer.Exit(code=1)
-    if unit not in _VALID_UNITS:
-        typer.echo(
-            f"Error: --unit must be one of: {', '.join(sorted(_VALID_UNITS))}.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
+    opts = _DisplayOptions(
+        top=top,
+        output=None,
+        memory=False,
+        compact=compact,
+        summary=summary,
+        quiet=quiet,
+        filter_pattern=filter_pattern,
+        unit=unit,
+        exclude_pattern=exclude_pattern,
+        sort=sort,
+        no_subprocess=False,
+        no_multiprocessing=False,
+    )
+    _validate_display_options(opts)
 
     if not path.exists():
         typer.echo(f"Error: File '{path}' not found.", err=True)
@@ -371,15 +467,17 @@ def show(
         typer.echo(f"Error: Invalid JSON file: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    if not quiet:
+    if not opts.quiet:
         _warn_high_hit_functions(run_data.functions)
     print_summary(
         run_data.functions,
-        top=top,
-        compact=compact,
-        summary=summary,
-        filter_pattern=filter_pattern,
-        unit=unit,
+        top=opts.top,
+        compact=opts.compact,
+        summary=opts.summary,
+        filter_pattern=opts.filter_pattern,
+        exclude_pattern=opts.exclude_pattern,
+        unit=opts.unit,
+        sort=opts.sort,
         scope=run_data.metadata.scope,
         n_registered=run_data.metadata.n_registered,
         wall_time=run_data.metadata.wall_time,
@@ -426,7 +524,44 @@ def _print_no_data_hint(exit_code: int, n_registered: int) -> None:
 
 
 _VALID_UNITS: Final[frozenset[str]] = frozenset({"s", "ms", "us", "ns", "auto"})
+_VALID_UNITS_DISPLAY: Final[tuple[str, ...]] = ("auto", "s", "ms", "us", "ns")
+_VALID_SORTS: Final[frozenset[str]] = frozenset(
+    {"time", "calls", "time-per-call", "name"}
+)
+_VALID_SORTS_DISPLAY: Final[tuple[str, ...]] = (
+    "time",
+    "calls",
+    "time-per-call",
+    "name",
+)
 _STDOUT_PATH: Final[str] = "-"
+
+
+def _validate_display_options(opts: _DisplayOptions) -> None:
+    """Validate display options shared between ``run`` and ``show``."""
+    if opts.top is not None and opts.top < 1:
+        typer.echo("Error: --top must be at least 1.", err=True)
+        raise typer.Exit(code=1)
+    if opts.unit not in _VALID_UNITS:
+        typer.echo(
+            f"Error: --unit must be one of: {', '.join(_VALID_UNITS_DISPLAY)}.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if opts.sort not in _VALID_SORTS:
+        typer.echo(
+            f"Error: --sort must be one of: {', '.join(_VALID_SORTS_DISPLAY)}.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+class _NullHolder:
+    """Placeholder for disabled subprocess/multiprocessing hooks."""
+
+    def __init__(self) -> None:
+        self.stats = None
+
 
 _BOOL_TRUE_FLAGS = {
     "--memory": "memory",
@@ -434,6 +569,8 @@ _BOOL_TRUE_FLAGS = {
     "--summary": "summary",
     "--quiet": "quiet",
     "-q": "quiet",
+    "--no-subprocess": "no_subprocess",
+    "--no-multiprocessing": "no_multiprocessing",
 }
 _ARG_FLAGS = {
     "--top": "top",
@@ -443,14 +580,14 @@ _ARG_FLAGS = {
     "--filter": "filter_pattern",
     "-f": "filter_pattern",
     "--unit": "unit",
+    "--exclude": "exclude_pattern",
+    "-e": "exclude_pattern",
+    "--sort": "sort",
 }
 _BOOL_FALSE_FLAGS = {
     "--no-memory": "memory",
     "--full": "compact",
 }
-_KNOWN_FLAGS = (
-    frozenset(_BOOL_TRUE_FLAGS) | frozenset(_ARG_FLAGS) | frozenset(_BOOL_FALSE_FLAGS)
-)
 
 
 def _split_scopes_and_options(tokens: list[str]) -> tuple[list[str], list[str]]:
@@ -480,20 +617,27 @@ def _split_scopes_and_options(tokens: list[str]) -> tuple[list[str], list[str]]:
 
 def _reparse_options(
     tokens: list[str],
-    top,
-    output,
-    memory,
-    compact,
-    summary,
-    quiet,
-    filter_pattern,
-    unit,
-):
+    top: int | None = None,
+    output: Path | None = None,
+    memory: bool = False,
+    compact: bool = True,
+    summary: bool = False,
+    quiet: bool = False,
+    filter_pattern: str | None = None,
+    unit: str = "auto",
+    exclude_pattern: str | None = None,
+    sort: str = "time",
+    no_subprocess: bool = False,
+    no_multiprocessing: bool = False,
+) -> _DisplayOptions:
     """Re-parse lazyline options from tokens found between scope and ``--``.
+
+    Returns a ``_DisplayOptions`` named tuple (also indexable as a plain
+    tuple for backward compatibility).
 
     Raises ``typer.Exit`` on invalid values or unrecognized tokens.
     """
-    vals = {
+    vals: dict[str, object] = {
         "top": top,
         "output": output,
         "memory": memory,
@@ -502,6 +646,10 @@ def _reparse_options(
         "quiet": quiet,
         "filter_pattern": filter_pattern,
         "unit": unit,
+        "exclude_pattern": exclude_pattern,
+        "sort": sort,
+        "no_subprocess": no_subprocess,
+        "no_multiprocessing": no_multiprocessing,
     }
     i = 0
     while i < len(tokens):
@@ -539,28 +687,7 @@ def _reparse_options(
                 err=True,
             )
             raise typer.Exit(code=1)
-    return (
-        vals["top"],
-        vals["output"],
-        vals["memory"],
-        vals["compact"],
-        vals["summary"],
-        vals["quiet"],
-        vals["filter_pattern"],
-        vals["unit"],
-    )
-
-
-def _check_misplaced_flags(command: list[str]) -> None:
-    """Warn when the first command token looks like a misplaced lazyline flag."""
-    if command and command[0] in _KNOWN_FLAGS:
-        typer.echo(
-            f"Error: '{command[0]}' looks like a lazyline option, not a command.\n"
-            f"Options must appear before SCOPE, or use -- to separate:\n"
-            f"  lazyline run [OPTIONS] SCOPE -- COMMAND",
-            err=True,
-        )
-        raise typer.Exit(code=1)
+    return _DisplayOptions(**vals)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

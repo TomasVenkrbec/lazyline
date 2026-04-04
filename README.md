@@ -186,10 +186,11 @@ details.
 ### `lazyline run`
 
 ```text
-lazyline run [OPTIONS] SCOPE [SCOPE...] [--] COMMAND [ARGS...]
+lazyline run [OPTIONS] SCOPE [SCOPE...] -- COMMAND [ARGS...]
 ```
 
 Profile a command, instrumenting all functions in the given scope(s).
+The `--` separator between SCOPE and COMMAND is required.
 
 | Option | Description |
 |--------|-------------|
@@ -199,18 +200,21 @@ Profile a command, instrumenting all functions in the given scope(s).
 | `--compact/--full` | Collapse un-hit lines (default) or show all |
 | `--summary` | Print only the summary table, no per-line detail |
 | `--filter PATTERN` / `-f PATTERN` | Only show functions matching fnmatch pattern(s) (comma-separated) |
+| `--exclude PATTERN` / `-e PATTERN` | Exclude functions matching fnmatch pattern(s) (comma-separated) |
+| `--sort KEY` | Sort by: `time` (default), `calls`, `time-per-call`, `name` |
 | `--quiet` / `-q` | Suppress discovery/registration stderr messages |
 | `--unit UNIT` | Time display unit: `auto` (default), `s`, `ms`, `us`, or `ns` |
+| `--no-subprocess` | Disable subprocess profiling injection |
+| `--no-multiprocessing` | Disable multiprocessing worker profiling |
 
-Options can appear before or after SCOPE. When placed after SCOPE,
-a `--` separator before COMMAND is required:
+Options can appear before or after SCOPE:
 
 ```bash
 lazyline run --top 5 my_package -- pytest tests/    # options before scope
 lazyline run my_package --top 5 -- pytest tests/    # options after scope
 ```
 
-Multiple scopes can be profiled in a single run (requires `--`):
+Multiple scopes can be profiled in a single run:
 
 ```bash
 lazyline run utils.py my_package -- python script.py
@@ -219,7 +223,7 @@ lazyline run utils.py my_package -- python script.py
 ### `lazyline show`
 
 ```text
-lazyline show FILE [--top N] [--compact/--full] [--summary] [--filter PATTERN] [--unit UNIT]
+lazyline show FILE [--top N] [--compact/--full] [--summary] [--filter PATTERN] [--exclude PATTERN] [--sort KEY] [--unit UNIT]
 ```
 
 Display profiling results from a previously saved JSON file.
@@ -292,10 +296,17 @@ lazyline run --output results.json my_package -- pytest -q
 lazyline show results.json --top 10
 ```
 
-Filter to specific functions (supports comma-separated patterns):
+Filter to specific functions (bare patterns are auto-wrapped with `*...*`):
 
 ```bash
-lazyline run --filter "*extract*,*match*" my_package -- pytest tests/
+lazyline run --filter "extract,match" my_package -- pytest tests/
+lazyline run --exclude "encoder" my_package -- pytest tests/
+```
+
+Sort results by calls or name:
+
+```bash
+lazyline run --sort calls my_package -- pytest tests/
 ```
 
 Profile a single `.py` file or multiple scopes in one run:
