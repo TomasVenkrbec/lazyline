@@ -9,23 +9,19 @@ import shutil
 import sys
 from typing import TYPE_CHECKING, Final, NamedTuple, TextIO
 
+from pygments import highlight as _pygments_highlight
+from pygments.formatters.terminal256 import (
+    Terminal256Formatter as _Terminal256Formatter,
+)
+from pygments.lexers.python import PythonLexer as _PythonLexer
+
 from lazyline.models import FunctionProfile, LineProfile
-
-try:
-    from pygments import highlight as _pygments_highlight
-    from pygments.formatters.terminal256 import (
-        Terminal256Formatter as _Terminal256Formatter,
-    )
-    from pygments.lexers.python import PythonLexer as _PythonLexer
-
-    _PYGMENTS_AVAILABLE: bool = True
-except ImportError:
-    _PYGMENTS_AVAILABLE = False
 
 if TYPE_CHECKING:
     from pygments.formatter import Formatter
     from pygments.lexer import Lexer
 
+_TOP_TIP_THRESHOLD: Final[int] = 50
 _MIN_NAME_WIDTH: Final[int] = 30
 _DEFAULT_WIDTH: Final[int] = 120
 _DIM_PIPE: Final[str] = "\033[2;90m│\033[0m"
@@ -38,8 +34,8 @@ _OVERFLOW: Final[str] = ">"
 
 
 def _make_highlighter(is_tty: bool) -> tuple[Lexer | None, Formatter | None]:
-    """Create Pygments lexer and formatter if available and appropriate."""
-    if is_tty and _PYGMENTS_AVAILABLE:
+    """Create Pygments lexer and formatter if outputting to a terminal."""
+    if is_tty:
         return _PythonLexer(), _Terminal256Formatter(style="monokai")
     return None, None
 
@@ -463,6 +459,9 @@ def print_summary(
             formatter=formatter,
         )
 
+    if n_registered is not None and n_registered > _TOP_TIP_THRESHOLD and top is None:
+        print("Tip: use --top N to limit output.", file=sys.stderr)
+
 
 def _print_function_detail(
     fp: FunctionProfile,
@@ -514,7 +513,7 @@ def _print_function_detail(
     fmt_tpc = f"{tpc * m:.{dp}f}"[:_MAX_NUM_WIDTH]
     stats_parts = [
         f"{fmt_total}{tu.label} total",
-        f"{fp.call_count} calls",
+        f"{fp.call_count} call{'s' if fp.call_count != 1 else ''}",
         f"{fmt_tpc}{tu.label}/call",
     ]
     if show_memory and fp.memory is not None:
