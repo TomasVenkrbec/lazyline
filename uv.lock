@@ -213,21 +213,17 @@ wheels = [
 
 [[package]]
 name = "lazyline"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "line-profiler" },
-    { name = "typer" },
-]
-
-[package.optional-dependencies]
-color = [
     { name = "pygments" },
+    { name = "typer" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "lazyline", extra = ["color"] },
+    { name = "lazyline" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -238,14 +234,13 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "line-profiler", specifier = ">=4.1.0" },
-    { name = "pygments", marker = "extra == 'color'", specifier = ">=2.14.0" },
+    { name = "pygments", specifier = ">=2.14.0" },
     { name = "typer", specifier = ">=0.15" },
 ]
-provides-extras = ["color"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "lazyline", extras = ["color"] },
+    { name = "lazyline" },
     { name = "pre-commit", specifier = ">=4" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-cov", specifier = ">=6" },

@@ -37,7 +37,6 @@ app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 # --- Constants ---
 
 _HIGH_HIT_THRESHOLD: Final[int] = 1_000_000
-_TOP_TIP_THRESHOLD: Final[int] = 50
 _STDOUT_PATH: Final[str] = "-"
 _VALID_UNITS: Final[frozenset[str]] = frozenset({"s", "ms", "us", "ns", "auto"})
 _VALID_UNITS_DISPLAY: Final[tuple[str, ...]] = ("auto", "s", "ms", "us", "ns")
@@ -340,14 +339,6 @@ def run(
     opts.validate()
 
     results, exit_code, n_registered, wall_time = _profile(scopes, command, opts)
-
-    if (
-        n_registered > _TOP_TIP_THRESHOLD
-        and opts.top is None
-        and not opts.summary
-        and not opts.quiet
-    ):
-        typer.echo("Tip: use --top N to limit output.", err=True)
 
     report_stream = (
         sys.stderr

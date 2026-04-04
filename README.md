@@ -4,426 +4,177 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/lazyline)](https://pypi.org/project/lazyline/)
 [![Tests](https://github.com/TomasVenkrbec/lazyline/actions/workflows/ci.yml/badge.svg)](https://github.com/TomasVenkrbec/lazyline/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/TomasVenkrbec/lazyline/graph/badge.svg)](https://codecov.io/gh/TomasVenkrbec/lazyline)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/TomasVenkrbec/lazyline/blob/main/LICENSE)
 
-**Zero-config line-level profiler for Python packages.**
-Point it at a package, give it a command, get a ranked line-by-line breakdown.
-No `@profile` decorators. No code changes. No guessing.
-
-## Why Lazyline?
-
-### The problem
-
-Finding line-level bottlenecks in a Python package typically means
-decorating suspect functions with `@profile`, running `kernprof`,
-reading the output, removing the decorators, and repeating until
-you find the real culprit. If you guess wrong, you waste a cycle.
-
-```bash
-# Without lazyline — manual, iterative workflow:
-#  1. Guess which functions might be slow
-#  2. Add @profile decorators to each one
-#  3. Run: LINE_PROFILE=1 python script.py or kernprof -lv script.py.
-#  4. Read output, realize the bottleneck is elsewhere
-#  5. Remove decorators, add new ones, go to step 3
-#  6. Clean up all decorators when done
-```
-
-Lazyline eliminates this loop. Point it at a package, give it a
-command, and every function is profiled automatically:
-
-```bash
-# With lazyline — one command, done:
-lazyline run my_package -- pytest tests/
-```
-
-No decorators. No code changes. No guessing.
-
-### What lazyline adds over raw line_profiler
-
-Lazyline wraps `line_profiler` and adds everything needed to go
-from "I want to profile this package" to "here are the bottlenecks"
-in a single command:
-
-#### Zero-config profiling
-
-- No `@profile` decorators — every function in the target scope
-  is discovered and instrumented automatically
-- Automatic module and namespace package discovery (point at a
-  package name, directory, or `.py` file)
-- `lru_cache`, C-extension wrappers, and callable wrapper instances
-  auto-unwrapped
-
-#### Subprocess and worker profiling
-
-- Child Python processes (e.g., Celery workers, Airflow tasks)
-  profiled via `sitecustomize.py` injection — no configuration needed
-- `concurrent.futures.ProcessPoolExecutor` and `multiprocessing.Pool`
-  workers profiled with per-worker instances and merged results
-
-#### Rich terminal output
-
-- Syntax-highlighted source code (Pygments, monokai theme)
-- Adaptive column widths that fit your terminal
-- Compact mode (default) collapses un-hit lines
-- Auto-scaling time units (s/ms/us/ns)
-
-#### Analysis workflow
-
-- `--top N`, `--filter`, `--summary` to focus on what matters
-- JSON export/import for sharing and later analysis
-- Optional `tracemalloc` memory tracking (`--memory`)
-
-### When to use lazyline
-
-Use lazyline when you need **exact, line-level timing** and want to
-find bottlenecks without modifying code. It is especially useful
-for profiling packages you don't own or can't easily change.
-
-If you need **low-overhead production profiling**, a sampling
-profiler like Scalene or py-spy is a better fit — they trade
-line-level precision for significantly lower overhead.
+**Zero-config, deterministic, line-level Python profiler.**
+No `@profile` decorators, no code changes — point it at a package or
+script and go. Subprocesses and multiprocessing pools profiled
+automatically. Find the lazy lines.
 
 ## Quick Start
 
 ```bash
 pip install lazyline
 
-# Profile a package while running a script:
-lazyline run my_package -- python evaluate.py --dataset "some_dataset"
-
-# Profile a package while running its CLI tool:
-lazyline run my_package -- my_package_cli run --verbose
-
-# Profile a package while running its test suite:
+# Profile a package while running its tests:
 lazyline run my_package -- pytest tests/
 
-# Profile any importable package — no code changes needed:
-lazyline run json -- python -c "import json; json.dumps([1, 2, 3])"
+# Profile a script:
+lazyline run script.py -- python script.py
 ```
 
-Lazyline discovers all modules in the given scope, instruments
-(attaches timing to) every Python function, runs the command,
-and prints a ranked breakdown:
-
 ```text
-Discovered 12 module(s) in scope 'my_package'.
-Registered 89 function(s) for profiling.
+Discovered 8 module(s) in scope 'my_package'.
+Registered 42 function(s) for profiling.
 
-=================================================
-  Lazyline results for my_package
-  3 of 89 functions called | Total: 12.4451s | Wall time: 10.2300s | Unit: s
+==========================================================================================
+  🔥 Lazyline results for my_package
+  3 of 42 functions called | Total: 4.1832s | Wall time: 4.0100s | Unit: s (auto)
 
 Summary
 
-Function                                                                Total (s)  % Total    Calls Time/Call (s)
------------------------------------------------------------------------------------------------------------------
-my_package.process.transform                                          8.3172    66.8%      500      0.016634
-my_package.io.load_data                                               3.1245    25.1%        1      3.124500
-my_package.utils.normalize                                            1.0034     8.1%    50000      0.000020
-...
------------------------------------------------------------------------------------------------------------------
-Total                                                                     12.4451
+Function                                        │Total (s)│ % Total│   Calls│Time/Call (s)
+------------------------------------------------------------------------------------------
+my_package.cleanup.deduplicate                  │   3.8315│   91.6%│       1│     3.831500
+my_package.io.read_csv                          │   0.3412│    8.2%│       1│     0.341200
+my_package.cleanup.normalize                    │   0.0105│    0.3%│   10000│     0.000001
+------------------------------------------------------------------------------------------
+Total                                           │   4.1832
 
 Functions
 
-my_package.process.transform (.../process.py:42)
-8.3172s total | 500 calls | 0.016634s/call
+my_package.cleanup.deduplicate (.../cleanup.py:10)
+3.8315s total │ 1 call │ 3.831500s/call
 
-Line     Hits   Time (s)  Time/Hit (s)     % Func Source
-----------------------------------------------------------------------------------------
-  42                                                  def transform(data):
-  43      500   0.031200      0.000062       0.4%         result = []
-  44   500000   7.982100      0.000016      96.0%         for row in data:
-  45   500000   0.301200      0.000001       3.6%             result.append(row)
-  46      500   0.002700      0.000005       0.0%         return result
+  Line │    Hits │ Time (s) │  Time/Hit (s) │  % Func │Source
+------------------------------------------------------------------------------------------
+    10 │         │          │               │         │def deduplicate(records):
+    11 │       1 │ 0.000100 │      0.000100 │    0.0% │    seen = []
+    12 │       1 │ 0.000000 │      0.000000 │    0.0% │    result = []
+    13 │   10000 │ 0.003400 │      0.000000 │    0.1% │    for r in records:
+    14 │   10000 │ 3.822100 │      0.000382 │   99.8% │        if r not in seen:
+    15 │    9813 │ 0.004200 │      0.000000 │    0.1% │            seen.append(r)
+    16 │    9813 │ 0.001700 │      0.000000 │    0.0% │            result.append(r)
+    17 │       1 │ 0.000000 │      0.000000 │    0.0% │    return result
 ```
 
-## Installation
+Line 14 burned 99.8% of `deduplicate` checking membership in a list
+on every iteration — that's your lazy line. Change `seen` to a `set`
+and it drops from O(n²) to O(n). Syntax highlighting makes hot lines
+stand out immediately.
 
-```bash
-pip install lazyline
+## Why Lazyline?
 
-# With syntax highlighting (recommended):
-pip install lazyline[color]
-```
+Lazyline wraps [line_profiler](https://github.com/pyutils/line_profiler)
+and adds everything needed to go from "I want to profile this package"
+to "here are the bottlenecks" in a single command:
 
-Requires Python 3.10+. The target package must be importable
-(installed or on `sys.path`) in the same environment. The `[color]`
-extra installs Pygments for syntax-highlighted source in terminal
-output (falls back to plain text if not installed).
+- **Zero configuration** — point at a package name, directory, or
+  `.py` file. Every function is discovered and instrumented
+  automatically. No `@profile` decorators, no code changes — be lazy,
+  let the tool do the work.
 
-## Comparison with Alternatives
+- **Subprocess and multiprocessing** — `ProcessPoolExecutor`,
+  `multiprocessing.Pool`, and child Python processes (Celery workers,
+  Airflow tasks) are profiled automatically. Results are merged
+  into a single report.
 
-| Tool | Granularity | Method | Code changes? | Subprocess profiling |
-|------|-------------|--------|---------------|----------------------|
-| **lazyline** | Per-line | Deterministic | None | Automatic |
-| `kernprof` / `line_profiler` | Per-line | Deterministic | `@profile` decorators | No |
-| `cProfile` | Per-function | Deterministic | None | No |
-| `Scalene` | Per-line | Sampling | None | Yes |
-| `py-spy` | Per-line (sampled) | Sampling | None (attach) | Yes (follow-children) |
+- **Deterministic precision** — exact hit counts and timing for every
+  line. "This line ran 47,382 times and took 3.2s." Sampling profilers
+  give statistical approximations; lazyline gives facts. When you need
+  to distinguish O(n) from O(n²), exact counts are the difference.
 
-**Unique:** Lazyline is the only line-level profiler that
-automatically profiles `ProcessPoolExecutor`, `multiprocessing.Pool`,
-and child Python processes (e.g., Celery workers, Airflow tasks)
-without any configuration.
+- **Focused scope, clean output** — you choose exactly which package
+  to profile. Unlike tools that profile everything in your working
+  directory, lazyline keeps output relevant and overhead contained.
 
-**Deterministic vs sampling:** Deterministic tracing (lazyline,
-line_profiler, cProfile) fires a callback on every line or function
-call, measuring exact execution counts and times. Sampling profilers
-(Scalene, py-spy) periodically interrupt the program and record
-where it is — much lower overhead, but statistical approximations
-rather than exact counts.
+## When to Use What
 
-Lazyline's deterministic approach means **relative rankings are
-reliable** (if function A appears 10x slower than B, that ratio
-holds), but **absolute times are inflated** by tracing overhead.
-See [Overhead and Limitations](#overhead-and-limitations) for
-details.
+No tool is best for everything. Pick the right one for the job:
+
+| You need... | Use | Why |
+|-------------|-----|-----|
+| Exact line-level timing across a package, no code changes | **lazyline** | Deterministic tracing with auto-discovery and subprocess support |
+| Low-overhead profiling with memory, GPU, and AI suggestions | **[Scalene](https://github.com/plasma-umass/scalene)** | Sampling (~10-20% overhead), broad feature set, web UI |
+| Attach to a running process in production | **[py-spy](https://github.com/benfred/py-spy)** | Out-of-process sampling, near-zero overhead, no restart needed |
+| "Which function is slow?" with beautiful call trees | **[Pyinstrument](https://github.com/joerick/pyinstrument)** | Statistical profiler, tree output, low overhead |
+| Line-level timing for specific functions you choose | **[kernprof](https://github.com/pyutils/line_profiler)** | Deterministic, but requires `@profile` decorators |
+| Quick function-level triage, no install | **cProfile** | Stdlib, always available, function-level only |
+
+### Feature comparison
+
+| Feature | lazyline | kernprof | Scalene | py-spy | Pyinstrument | cProfile |
+|---------|----------|----------|---------|--------|--------------|----------|
+| Granularity | Line | Line | Line | Line | Function | Function |
+| Method | Deterministic | Deterministic | Sampling | Sampling | Sampling | Deterministic |
+| Code changes needed | None | `@profile` | None | None | None | None |
+| Exact hit counts | Yes | Yes | No | No | No | Yes (fn-level) |
+| Subprocess profiling | Automatic | No | Partial | Yes | No | No |
+| Multiprocessing pools | Automatic | No | Partial | Yes | No | No |
+| Memory profiling | Opt-in | No | Built-in | No | No | No |
+| GPU profiling | No | No | Yes | No | No | No |
+| Overhead | 1.2–7x | 1.2–7x | ~10–20% | ~0% | Low | Moderate |
+
+**Lazyline trades overhead for precision.** Deterministic tracing fires
+a callback on every line execution. For functions with real work (>0.1ms
+per call), overhead is negligible (~1.2x). For tight loops calling tiny
+functions millions of times, it can reach ~7x. Relative rankings are
+always reliable — use lazyline to find *which* code is lazy, not to
+measure *how fast* it runs. See
+[benchmarks](https://github.com/TomasVenkrbec/lazyline/blob/main/benchmarks/README.md)
+for detailed measurements.
 
 ## Usage
 
-### `lazyline run`
-
-```text
-lazyline run [OPTIONS] SCOPE [SCOPE...] -- COMMAND [ARGS...]
-```
-
-Profile a command, instrumenting all functions in the given scope(s).
-The `--` separator between SCOPE and COMMAND is required.
-
-| Option | Description |
-|--------|-------------|
-| `--top N` / `-n N` | Show only the N slowest functions |
-| `--memory` | Enable tracemalloc memory tracking |
-| `--output FILE` / `-o FILE` | Export results to JSON (`-` for stdout) |
-| `--compact/--full` | Collapse un-hit lines (default) or show all |
-| `--summary` | Print only the summary table, no per-line detail |
-| `--filter PATTERN` / `-f PATTERN` | Only show functions matching fnmatch pattern(s) (comma-separated) |
-| `--exclude PATTERN` / `-e PATTERN` | Exclude functions matching fnmatch pattern(s) (comma-separated) |
-| `--sort KEY` | Sort by: `time` (default), `calls`, `time-per-call`, `name` |
-| `--quiet` / `-q` | Suppress discovery/registration stderr messages |
-| `--unit UNIT` | Time display unit: `auto` (default), `s`, `ms`, `us`, or `ns` |
-| `--no-subprocess` | Disable subprocess profiling injection |
-| `--no-multiprocessing` | Disable multiprocessing worker profiling |
-
-Options can appear before or after SCOPE:
-
 ```bash
-lazyline run --top 5 my_package -- pytest tests/    # options before scope
-lazyline run my_package --top 5 -- pytest tests/    # options after scope
-```
+# Profile a package during its test suite
+lazyline run my_package -- pytest tests/
 
-Multiple scopes can be profiled in a single run:
+# Profile while running a script
+lazyline run my_package -- python evaluate.py
 
-```bash
+# Profile a CLI tool (hyphenated console scripts work too)
+lazyline run my_package -- my-tool run-all
+
+# Export results, view later
+lazyline run -o results.json my_package -- pytest tests/
+lazyline show results.json --top 10
+
+# Multiple scopes in one run
 lazyline run utils.py my_package -- python script.py
 ```
 
-### `lazyline show`
+Requires Python 3.10+. The target package must be importable in the
+same environment.
 
-```text
-lazyline show FILE [--top N] [--compact/--full] [--summary] [--filter PATTERN] [--exclude PATTERN] [--sort KEY] [--unit UNIT]
-```
+See the
+[full usage guide](https://github.com/TomasVenkrbec/lazyline/blob/main/docs/usage.md)
+for all CLI options, scope formats, command resolution, output details,
+and more examples.
 
-Display profiling results from a previously saved JSON file.
+## Documentation
 
-### `lazyline --version`
+- **[Usage Guide][docs-usage]** — CLI reference, scope formats,
+  output details
+- **[How It Works][docs-how]** — architecture, overhead, limitations
+- **[Benchmarks][docs-bench]** — overhead measurements and methodology
+- **[Contributing][docs-contrib]** — development setup, tests,
+  code style
+- **[Changelog][docs-changelog]**
 
-Print the installed version and exit.
+[docs-usage]: https://github.com/TomasVenkrbec/lazyline/blob/main/docs/usage.md
+[docs-how]: https://github.com/TomasVenkrbec/lazyline/blob/main/docs/how-it-works.md
+[docs-bench]: https://github.com/TomasVenkrbec/lazyline/blob/main/benchmarks/README.md
+[docs-contrib]: https://github.com/TomasVenkrbec/lazyline/blob/main/CONTRIBUTING.md
+[docs-changelog]: https://github.com/TomasVenkrbec/lazyline/blob/main/CHANGELOG.md
 
-## Scope
+---
 
-Unlike tools like cProfile that profile everything, lazyline
-focuses on specific code you choose — this keeps output clean
-and overhead low.
+Found a problem with lazyline?
+[Open an issue](https://github.com/TomasVenkrbec/lazyline/issues) and
+tell us about it, or give the project a
+[star](https://github.com/TomasVenkrbec/lazyline) if you found it useful.
 
-SCOPE tells lazyline which package or module to profile. It
-accepts three formats:
+## License
 
-| Format | Example | What it does |
-|--------|---------|--------------|
-| Dotted module path | `my_package` | Imports and walks all submodules |
-| Directory path | `my_package/utils` | Converted to dotted path, then walked |
-| Single module | `json` | Imports that module only (+ submodules) |
-| Single `.py` file | `utils.py` | Imports the file directly (no `sys.path` needed) |
-
-Lazyline discovers modules via `pkgutil.walk_packages()` for
-regular packages and filesystem scanning for implicit namespace
-packages (directories without `__init__.py`). Every Python
-function found is registered. C extension functions are silently
-skipped.
-
-## Commands
-
-COMMAND is what lazyline executes under profiling. Supported forms:
-
-| Form | Example |
-|------|---------|
-| Bare module name | `pytest tests/` |
-| Console script (incl. hyphens) | `my-tool run-all` |
-| `python -m module` | `python -m pytest -q` |
-| Script file | `python script.py` |
-| Inline code | `python -c "import json; json.dumps(1)"` |
-
-Hyphenated console scripts (e.g., `my-tool`) are resolved
-via `importlib.metadata` entry points automatically.
-
-## Examples
-
-Profile a package while running its test suite:
-
-```bash
-lazyline run --top 10 my_package -- pytest tests/
-```
-
-Profile a CLI tool (console script with hyphens works too):
-
-```bash
-lazyline run my_package.cli -- my-tool run-all
-```
-
-Profile with memory tracking:
-
-```bash
-lazyline run --memory my_package -- pytest tests/ -q
-```
-
-Export results for later analysis:
-
-```bash
-lazyline run --output results.json my_package -- pytest -q
-lazyline show results.json --top 10
-```
-
-Filter to specific functions (bare patterns are auto-wrapped with `*...*`):
-
-```bash
-lazyline run --filter "extract,match" my_package -- pytest tests/
-lazyline run --exclude "encoder" my_package -- pytest tests/
-```
-
-Sort results by calls or name:
-
-```bash
-lazyline run --sort calls my_package -- pytest tests/
-```
-
-Profile a single `.py` file or multiple scopes in one run:
-
-```bash
-lazyline run utils.py -- python script.py
-lazyline run utils.py my_package -- python evaluate.py
-```
-
-## Output Format
-
-Lazyline prints a results header, a summary table, and per-line detail:
-
-**Results header** — scope, coverage, total time, wall-clock time, and display unit:
-
-```text
-=================================================
-  Lazyline results for pkg
-  2 of 15 functions called | Total: 1.4690s | Wall time: 1.2300s | Unit: s
-```
-
-**Summary table** — all profiled functions ranked by total time:
-
-```text
-Function                                                                Total (s)  % Total    Calls Time/Call (s)
------------------------------------------------------------------------------------------------------------------
-pkg.module.slow_func                                                       1.2345    82.1%      100      0.012345
-pkg.module.helper                                                          0.2345    15.6%     1000      0.000235
-...
-```
-
-**Per-line detail** — source code with timing for each function:
-
-```text
-pkg.module.slow_func (pkg/module.py:42)
-1.2345s total | 100 calls | 0.012345s/call
-
-Line     Hits   Time (s)  Time/Hit (s)     % Func Source
-----------------------------------------------------------------------------------------
-  42                                                  def slow_func(data):
-  43      100   0.000100      0.000001       0.0%         result = []
-  44   100000   1.234000      0.000012      99.9%         for item in data:
-  45   100000   0.000400      0.000000       0.0%             result.append(item)
-  46      100   0.000000      0.000000       0.0%         return result
-```
-
-On terminals, source code is syntax-highlighted (monokai theme) and
-faint `│` column separators appear between numeric columns for easier
-visual tracking across wide tables. Piped/file output uses plain text
-with no ANSI formatting.
-
-With `--memory`, an additional `Net Mem` column shows per-line
-net memory allocation delta (bytes allocated minus freed).
-
-## How It Works
-
-1. **Discovery** — imports the target scope and walks all
-   submodules via `pkgutil.walk_packages()`, supplemented with
-   filesystem scanning for implicit namespace packages.
-2. **Registration** — registers every Python function with
-   `line_profiler`'s `LineProfiler.add_module()`. C extensions
-   are skipped; `lru_cache` wrappers and callable wrapper instances
-   are auto-unwrapped.
-3. **Execution** — runs the user's command with profiling
-   enabled. `line_profiler` uses `sys.monitoring` (Python 3.12+)
-   or `sys.settrace` for deterministic per-line tracing.
-4. **Collection** — extracts per-line timing data, filters
-   out stdlib wrapper leaks via scope path matching.
-5. **Memory** (optional) — `tracemalloc` takes before/after
-   snapshots and computes per-line net allocation deltas.
-6. **Multiprocessing** — `concurrent.futures.ProcessPoolExecutor`
-   and `multiprocessing.Pool` worker processes are automatically
-   profiled with per-worker `LineProfiler` instances, stats
-   merged after execution.
-7. **Subprocesses** — if the command spawns child Python
-   processes (e.g., Celery workers, Airflow tasks), lazyline injects
-   a `sitecustomize.py` bootstrap via `PYTHONPATH` so child
-   interpreters profile the same scope automatically.
-
-## Overhead and Limitations
-
-Lazyline uses **deterministic tracing** (exact measurement of every
-line, as opposed to sampling which checks periodically). This fires
-a callback on every line execution, which has important implications:
-
-**Overhead inflates both wall-clock runtime and reported times.**
-The callback cost is included in each line's measured time. For
-functions with meaningful per-call work (>0.1ms), overhead is
-negligible (~1.2x). For tight loops calling tiny functions millions
-of times, overhead can be ~7x.
-
-**Relative rankings are reliable.** If function A appears 10x
-slower than function B, that ratio holds regardless of overhead.
-Use lazyline to find *which* functions are slowest, not to measure
-*absolute* execution time.
-
-**Memory measurements are not inflated** by line-profiler tracing.
-`tracemalloc` hooks the memory allocator separately. However,
-allocation-heavy code (JSON serialization, string formatting) may
-see significant wall-clock slowdown from tracemalloc's per-alloc
-hooks. Use `--memory` only when you need allocation data.
-
-Lazyline warns when a function exceeds 1M total line hits, as
-reported times for such functions are unreliable.
-
-Other limitations:
-
-- `concurrent.futures.ProcessPoolExecutor` and `multiprocessing.Pool`
-  workers are profiled automatically (requires `fork` start method —
-  default on Linux; `spawn`/`forkserver` are not supported). Direct
-  `multiprocessing.Process` usage is not covered.
-- Child processes started with `python -S` skip `sitecustomize.py`
-  loading, so subprocess profiling is silently disabled.
-- C extension functions are skipped (no Python bytecode to trace).
-- `tracemalloc` shows net allocation delta only — transient
-  allocations (alloc + free within the run) appear as ~0.
-- `tracemalloc` adds ~30% memory overhead for its own bookkeeping.
-
-See [`benchmarks/README.md`](benchmarks/README.md) for detailed
-overhead measurements and methodology.
+MIT — see [LICENSE](https://github.com/TomasVenkrbec/lazyline/blob/main/LICENSE).

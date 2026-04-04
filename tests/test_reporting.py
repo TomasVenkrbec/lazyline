@@ -1409,27 +1409,6 @@ def test_no_highlighting_in_non_tty():
     assert "\x1b[" not in output
 
 
-def test_fallback_without_pygments():
-    """When Pygments is unavailable, output should be produced without errors."""
-    from unittest.mock import patch
-
-    def _boom(*args, **kwargs):
-        raise RuntimeError("Pygments should not be called when unavailable")
-
-    results = [_result_with_time()]
-    stream = _tty_stream()
-    with (
-        patch("lazyline.reporting._PYGMENTS_AVAILABLE", False),
-        patch("lazyline.reporting._pygments_highlight", _boom),
-    ):
-        print_summary(results, stream=stream, width=120)
-    output = stream.getvalue()
-    # Should still have output
-    assert "x = 1" in output
-    # Should not have Pygments 256-color ANSI
-    assert "\x1b[38;5;" not in output
-
-
 # --- _normalize_patterns tests ---
 
 

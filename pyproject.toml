@@ -1,7 +1,7 @@
 [project]
 name = "lazyline"
-version = "0.1.0"
-description = "Zero-config line-level profiler for Python packages — no decorators, no code changes."
+version = "0.2.0"
+description = "Zero-config line-level Python profiler. Profile any package or script with one command — no @profile decorators, no code changes. Automatic subprocess and multiprocessing support."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -10,11 +10,18 @@ keywords = [
     "profiler",
     "profiling",
     "line-profiler",
+    "line-profiling",
+    "python-profiler",
     "performance",
     "benchmark",
     "optimization",
     "bottleneck",
     "zero-config",
+    "timing",
+    "tracing",
+    "subprocess-profiling",
+    "multiprocessing",
+    "cli",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -31,20 +38,17 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
     "Topic :: Software Development :: Testing",
     "Topic :: System :: Benchmark",
+    "Topic :: Utilities",
     "Typing :: Typed",
 ]
-dependencies = ["typer>=0.15", "line_profiler>=4.1.0"]
-
-[project.optional-dependencies]
-color = ["Pygments>=2.14.0"]
+dependencies = ["typer>=0.15", "line_profiler>=4.1.0", "Pygments>=2.14.0"]
 
 [project.scripts]
 lazyline = "lazyline.__main__:app"
 
 [project.urls]
-Homepage = "https://github.com/TomasVenkrbec/lazyline"
 Repository = "https://github.com/TomasVenkrbec/lazyline"
-Documentation = "https://github.com/TomasVenkrbec/lazyline#readme"
+Documentation = "https://github.com/TomasVenkrbec/lazyline/blob/main/docs/usage.md"
 Changelog = "https://github.com/TomasVenkrbec/lazyline/blob/main/CHANGELOG.md"
 Issues = "https://github.com/TomasVenkrbec/lazyline/issues"
 
@@ -59,7 +63,7 @@ dev = [
     "ty>=0.0.1a1",
     "pre-commit>=4",
     "ruff>=0.11",
-    "lazyline[color]",
+    "lazyline",
 ]
 
 [tool.uv]
