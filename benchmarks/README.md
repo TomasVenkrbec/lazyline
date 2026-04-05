@@ -39,9 +39,9 @@ All times in seconds. 5 repeats (median).
 
 | Workload | Baseline | Wall | Reported | Overhead | Inflation |
 |----------|----------|------|----------|----------|-----------|
-| hot_loop | 0.31     | 2.33 | 2.76     | 7.6x    | 9.0x     |
-| moderate | 0.39     | 0.46 | 0.45     | 1.2x    | 1.2x     |
-| cold     | 0.31     | 0.30 | 0.28     | 1.0x    | 0.9x     |
+| hot_loop | 0.31     | 2.33 | 2.76     | 7.6x     | 9.0x      |
+| moderate | 0.39     | 0.46 | 0.45     | 1.2x     | 1.2x      |
+| cold     | 0.31     | 0.30 | 0.28     | 1.0x     | 0.9x      |
 
 - **hot_loop**: tiny function called 1M times (worst case for
   deterministic tracing)
@@ -72,10 +72,10 @@ affects overhead for the hot_loop workload.
 
 | Padding Functions | Wall (s) | Reported (s) | Overhead |
 |-------------------|----------|--------------|----------|
-| 0                 | 2.25     | 2.66         | 7.3x    |
-| 10                | 2.23     | 2.61         | 7.3x    |
-| 100               | 2.26     | 2.70         | 7.4x    |
-| 500               | 2.42     | 2.89         | 7.9x    |
+| 0                 | 2.25     | 2.66         | 7.3x     |
+| 10                | 2.23     | 2.61         | 7.3x     |
+| 100               | 2.26     | 2.70         | 7.4x     |
+| 500               | 2.42     | 2.89         | 7.9x     |
 
 No measurable effect. The cost comes entirely from per-line
 callbacks in functions that actually execute, not from how

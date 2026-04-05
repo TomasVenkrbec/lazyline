@@ -14,7 +14,7 @@ Profile a command, instrumenting all functions in the given scope(s).
 The `--` separator between SCOPE and COMMAND is required.
 
 | Option | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `--top N` / `-n N` | Show only the N slowest functions |
 | `--memory` / `--no-memory` | Enable tracemalloc memory tracking |
 | `--output FILE` / `-o FILE` | Export results to JSON (`-` for stdout) |
@@ -64,7 +64,7 @@ SCOPE tells lazyline which package or module to profile. It
 accepts three formats:
 
 | Format | Example | What it does |
-|--------|---------|--------------|
+| -------- | --------- | -------------- |
 | Dotted module path | `my_package` | Imports and walks all submodules |
 | Directory path | `my_package/utils` | Converted to dotted path, then walked |
 | Single module | `json` | Imports that module only (+ submodules) |
@@ -81,7 +81,7 @@ skipped.
 COMMAND is what lazyline executes under profiling. Supported forms:
 
 | Form | Example |
-|------|---------|
+| ------ | --------- |
 | Bare module name | `pytest tests/` |
 | Console script (incl. hyphens) | `my-tool run-all` |
 | `python -m module` | `python -m pytest -q` |
