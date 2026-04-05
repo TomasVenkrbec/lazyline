@@ -93,7 +93,7 @@ to "here are the bottlenecks" in a single command:
 No tool is best for everything. Pick the right one for the job:
 
 | You need... | Use | Why |
-|-------------|-----|-----|
+| ------------- | ----- | ----- |
 | Exact line-level timing across a package, no code changes | **lazyline** | Deterministic tracing with auto-discovery and subprocess support |
 | Low-overhead profiling with memory, GPU, and AI suggestions | **[Scalene](https://github.com/plasma-umass/scalene)** | Sampling (~10-20% overhead), broad feature set, web UI |
 | Attach to a running process in production | **[py-spy](https://github.com/benfred/py-spy)** | Out-of-process sampling, near-zero overhead, no restart needed |
@@ -104,7 +104,7 @@ No tool is best for everything. Pick the right one for the job:
 ### Feature comparison
 
 | Feature | lazyline | kernprof | Scalene | py-spy | Pyinstrument | cProfile |
-|---------|----------|----------|---------|--------|--------------|----------|
+| --------- | ---------- | ---------- | --------- | -------- | -------------- | ---------- |
 | Granularity | Line | Line | Line | Line | Function | Function |
 | Method | Deterministic | Deterministic | Sampling | Sampling | Sampling | Deterministic |
 | Code changes needed | None | `@profile` | None | None | None | None |

@@ -9,9 +9,10 @@ repos:
           - id: check-toml
           - id: check-added-large-files
     - repo: https://github.com/DavidAnson/markdownlint-cli2
-      rev: v0.17.2
+      rev: v0.22.0
       hooks:
           - id: markdownlint-cli2
+            exclude: ^\.github/ISSUE_TEMPLATE/
     - repo: https://github.com/astral-sh/ruff-pre-commit
       rev: v0.11.4
       hooks:
