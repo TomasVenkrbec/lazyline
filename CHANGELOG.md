@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- AI coding assistant skill (`skills/lazyline/SKILL.md`) that guides
+  profiling, interpretation, and optimization.
+- Claude Code plugin (`.claude-plugin/`) for distributing the skill
+  via the plugin marketplace.
+
 ### Changed
 
 - Compact mode now keeps `def` / `async def` lines visible when the function

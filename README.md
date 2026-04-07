@@ -60,8 +60,13 @@ my_package.cleanup.deduplicate (.../cleanup.py:10)
 
 Line 14 burned 99.8% of `deduplicate` checking membership in a list
 on every iteration — that's your lazy line. Change `seen` to a `set`
-and it drops from O(n²) to O(n). Syntax highlighting makes hot lines
-stand out immediately.
+and it drops from O(n²) to O(n).
+
+> [!TIP]
+> Using an AI coding assistant? Install the
+> [lazyline plugin](#claude-code-plugin) for Claude Code, or copy
+> [`skills/lazyline/SKILL.md`](skills/lazyline/SKILL.md) into any
+> assistant that supports markdown skill files.
 
 ## Why Lazyline?
 
@@ -151,6 +156,25 @@ See the
 [full usage guide](https://github.com/TomasVenkrbec/lazyline/blob/main/docs/usage.md)
 for all CLI options, scope formats, command resolution, output details,
 and more examples.
+
+## Claude Code Plugin
+
+Lazyline ships as a [Claude Code plugin](https://docs.anthropic.com/en/docs/claude-code/plugins).
+Install it and Claude will know how to profile your code, interpret
+results, and suggest optimizations:
+
+```bash
+/plugin marketplace add TomasVenkrbec/lazyline
+/plugin install lazyline@lazyline
+```
+
+Then use `/lazyline my_package -- python main.py` or let Claude invoke
+it automatically when you ask about performance.
+
+The skill also works with any AI coding assistant that supports
+markdown skill files — copy
+[`skills/lazyline/SKILL.md`](skills/lazyline/SKILL.md)
+into your assistant's configuration.
 
 ## Documentation
 
