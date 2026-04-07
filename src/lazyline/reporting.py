@@ -537,10 +537,11 @@ def _print_function_detail(
         if lp is _ELLIPSIS_SENTINEL:
             _print_ellipsis(stream, show_memory, time_w, tph_w, dsep)
         else:
-            # In compact mode, don't dim the first line (def line) — it
-            # anchors the reader even though it has zero hits.
+            # In compact mode, don't dim the header (first line) or def
+            # lines — they anchor the reader even with zero hits.
             assert isinstance(lp, LineProfile)
-            dim_unhit = is_tty and not (compact and i == 0)
+            is_def_line = lp.source.lstrip().startswith(("def ", "async def "))
+            dim_unhit = is_tty and not (compact and (i == 0 or is_def_line))
             _print_line(
                 lp,
                 func_total,
@@ -562,6 +563,14 @@ def _print_function_detail(
 _ELLIPSIS_SENTINEL = object()
 
 
+def _flush_unhit(buffer: list[LineProfile], result: list[LineProfile | object]) -> None:
+    """Flush unhit lines: show singles inline, collapse 2+ to ellipsis."""
+    if len(buffer) == 1:
+        result.append(buffer[0])
+    elif len(buffer) > 1:
+        result.append(_ELLIPSIS_SENTINEL)
+
+
 def _prepare_lines(fp: FunctionProfile, compact: bool) -> list[LineProfile | object]:
     """Build the list of lines to print, inserting ellipsis markers in compact mode."""
     if any(lp.source for lp in fp.lines):
@@ -572,19 +581,25 @@ def _prepare_lines(fp: FunctionProfile, compact: bool) -> list[LineProfile | obj
     if not compact:
         return raw_lines  # ty: ignore[invalid-return-type]
 
-    # Compact: keep function header (first line), hit lines, and insert
-    # ellipsis markers for collapsed consecutive un-hit lines.
+    # Compact: keep header (first line), def/async def lines, and hit lines.
+    # Collapse 2+ consecutive un-hit lines into an ellipsis marker, but show
+    # single un-hit lines inline (eliding one line saves no space and is
+    # misleading).
     result: list[LineProfile | object] = []
-    skipping = False
+    unhit_buffer: list[LineProfile] = []
+
     for i, lp in enumerate(raw_lines):
         is_header = i == 0
+        is_def = lp.source.lstrip().startswith(("def ", "async def "))
         is_hit = lp.hits > 0
-        if is_header or is_hit:
-            skipping = False
+        if is_header or is_def or is_hit:
+            _flush_unhit(unhit_buffer, result)
+            unhit_buffer = []
             result.append(lp)
-        elif not skipping:
-            result.append(_ELLIPSIS_SENTINEL)
-            skipping = True
+        else:
+            unhit_buffer.append(lp)
+
+    _flush_unhit(unhit_buffer, result)
     return result
 
 

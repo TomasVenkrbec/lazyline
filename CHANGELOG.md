@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Compact mode now keeps `def` / `async def` lines visible when the function
+  has decorators.
+- Single unhit lines between hit lines are now shown instead of being replaced
+  with `...`.
+
 ## [0.2.0] - 2026-04-04
 
 ### Added

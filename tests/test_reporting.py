@@ -310,10 +310,10 @@ def test_compact_single_ellipsis_for_consecutive_unhit():
     stream = io.StringIO()
     print_summary(results, compact=True, stream=stream)
     output = stream.getvalue()
-    # Lines 2-4 (docstring) should produce one ellipsis, not three
+    # Lines 2-4 (docstring) should produce one ellipsis, not three.
+    # Line 6 (single unhit comment) is shown inline, not collapsed.
     lines = [x for x in output.splitlines() if "..." in x and "mod.func" not in x]
-    # Two ellipsis groups: lines 2-4 and line 6
-    assert len(lines) == 2
+    assert len(lines) == 1
 
 
 def test_compact_false_shows_all_lines():
@@ -343,6 +343,126 @@ def test_full_mode_shows_all_lines():
     output = stream.getvalue()
     assert "Docstring line 1" in output
     assert "Docstring line 3" in output
+
+
+def test_compact_single_unhit_shown_inline():
+    """A single unhit line between two hit lines is shown, not elided."""
+    results = _make_profile_with_docstring()
+    stream = io.StringIO()
+    print_summary(results, compact=True, stream=stream)
+    output = stream.getvalue()
+    # Line 6 ("# comment") is a single unhit line between hits 5 and 7.
+    assert "# comment" in output
+
+
+def _make_profile_with_decorators():
+    """Profile where start_line points to a decorator, not the def line."""
+    return [
+        FunctionProfile(
+            module="mod",
+            name="decorated",
+            filename="/fake/mod.py",
+            start_line=20,
+            total_time=0.5,
+            call_count=5,
+            lines=[
+                LineProfile(lineno=20, hits=0, time=0.0, source="@lru_cache"),
+                LineProfile(
+                    lineno=21, hits=0, time=0.0, source="@retry(max_attempts=3)"
+                ),
+                LineProfile(lineno=22, hits=0, time=0.0, source="def decorated(x, y):"),
+                LineProfile(
+                    lineno=23, hits=0, time=0.0, source='    """Docstring line 1.'
+                ),
+                LineProfile(lineno=24, hits=0, time=0.0, source=""),
+                LineProfile(
+                    lineno=25, hits=0, time=0.0, source='    Docstring line 3."""'
+                ),
+                LineProfile(lineno=26, hits=5, time=0.3, source="    result = x + y"),
+                LineProfile(lineno=27, hits=5, time=0.2, source="    return result"),
+            ],
+        ),
+    ]
+
+
+def test_compact_decorated_function_keeps_def_visible():
+    """When decorators precede def, the def line must still be shown."""
+    results = _make_profile_with_decorators()
+    stream = io.StringIO()
+    print_summary(results, compact=True, stream=stream)
+    output = stream.getvalue()
+    assert "@lru_cache" in output
+    assert "def decorated(x, y):" in output
+    assert "result = x + y" in output
+    assert "return result" in output
+    # Docstring (3 lines) is collapsed
+    assert "Docstring line 1" not in output
+    assert "Docstring line 3" not in output
+
+
+def test_compact_async_def_kept_visible():
+    """async def lines are treated like def lines in compact mode."""
+    results = [
+        FunctionProfile(
+            module="mod",
+            name="afunc",
+            filename="/fake/mod.py",
+            start_line=10,
+            total_time=0.5,
+            call_count=5,
+            lines=[
+                LineProfile(lineno=10, hits=0, time=0.0, source="@some_decorator"),
+                LineProfile(lineno=11, hits=0, time=0.0, source="async def afunc(x):"),
+                LineProfile(lineno=12, hits=0, time=0.0, source='    """Docs."""'),
+                LineProfile(lineno=13, hits=5, time=0.5, source="    return await x"),
+            ],
+        ),
+    ]
+    stream = io.StringIO()
+    print_summary(results, compact=True, stream=stream)
+    output = stream.getvalue()
+    assert "async def afunc(x):" in output
+    assert "@some_decorator" in output
+
+
+def test_compact_decorated_def_not_dimmed_in_tty():
+    """def line kept via is_def should not be dimmed when not at index 0."""
+    results = _make_profile_with_decorators()
+    stream = _tty_stream()
+    print_summary(results, compact=True, stream=stream, width=120)
+    lines = stream.getvalue().splitlines()
+    def_lines = [ln for ln in lines if "def" in ln and "decorated" in ln]
+    assert def_lines
+    assert "\033[2m" not in def_lines[0]
+
+
+def test_compact_trailing_unhit_collapsed():
+    """Trailing unhit lines after the last hit are handled correctly."""
+    results = [
+        FunctionProfile(
+            module="mod",
+            name="func",
+            filename="/fake/mod.py",
+            start_line=1,
+            total_time=0.5,
+            call_count=5,
+            lines=[
+                LineProfile(lineno=1, hits=0, time=0.0, source="def func():"),
+                LineProfile(lineno=2, hits=5, time=0.5, source="    x = compute()"),
+                LineProfile(lineno=3, hits=0, time=0.0, source="    # cleanup 1"),
+                LineProfile(lineno=4, hits=0, time=0.0, source="    # cleanup 2"),
+                LineProfile(lineno=5, hits=0, time=0.0, source="    # cleanup 3"),
+            ],
+        ),
+    ]
+    stream = io.StringIO()
+    print_summary(results, compact=True, stream=stream)
+    output = stream.getvalue()
+    assert "cleanup" not in output
+    ellipsis_lines = [
+        x for x in output.splitlines() if "..." in x and "mod.func" not in x
+    ]
+    assert len(ellipsis_lines) == 1
 
 
 # --- summary mode ---
