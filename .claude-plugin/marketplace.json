@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "lazyline",
-      "source": ".",
+      "source": "./",
       "description": "Profile Python code with lazyline to find line-level bottlenecks and optimize iteratively.",
       "version": "0.2.0",
       "keywords": ["profiling", "performance", "optimization", "python"]
