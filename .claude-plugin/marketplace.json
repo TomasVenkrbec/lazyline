@@ -1,0 +1,19 @@
+{
+  "name": "lazyline",
+  "owner": {
+    "name": "Tomáš Venkrbec",
+    "email": "venkrbec.tomas@gmail.com"
+  },
+  "metadata": {
+    "description": "Line-level Python profiling skill for Claude Code"
+  },
+  "plugins": [
+    {
+      "name": "lazyline",
+      "source": ".",
+      "description": "Profile Python code with lazyline to find line-level bottlenecks and optimize iteratively.",
+      "version": "0.2.0",
+      "keywords": ["profiling", "performance", "optimization", "python"]
+    }
+  ]
+}

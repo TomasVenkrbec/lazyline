@@ -1,0 +1,13 @@
+{
+  "name": "lazyline",
+  "description": "Line-level Python profiler skill for Claude Code. Profile any package or script to find exactly which lines are slow, then optimize iteratively.",
+  "version": "0.2.0",
+  "author": {
+    "name": "Tomáš Venkrbec",
+    "email": "venkrbec.tomas@gmail.com"
+  },
+  "homepage": "https://github.com/TomasVenkrbec/lazyline",
+  "repository": "https://github.com/TomasVenkrbec/lazyline",
+  "license": "MIT",
+  "keywords": ["profiling", "performance", "optimization", "python", "line-profiler"]
+}
