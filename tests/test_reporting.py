@@ -1215,6 +1215,48 @@ def test_no_parallel_note_without_parallel_data():
     assert "parallel worker time" not in stream.getvalue()
 
 
+def test_module_entry_excluded_from_grand_total():
+    """<module> time should not inflate the grand total."""
+    func = _result_with_time(total_time=1.0)
+    mod_entry = FunctionProfile(
+        module="script",
+        name="<module>",
+        filename="/fake/script.py",
+        start_line=1,
+        total_time=1.0,
+        call_count=1,
+        lines=[LineProfile(lineno=1, hits=1, time=1.0, source="main()")],
+    )
+    stream = io.StringIO()
+    print_summary([func, mod_entry], stream=stream, scope="pkg")
+    output = stream.getvalue()
+    # Grand total should be 1.0 (func only), not 2.0
+    assert "inclusive" in output
+    # The <module> entry should have * instead of %
+    output_lines = output.split("\n")
+    module_lines = [ln for ln in output_lines if "<module>" in ln]
+    assert any("*" in ln for ln in module_lines)
+
+
+def test_module_only_results_use_full_total():
+    """When all results are <module>, grand total should include them."""
+    mod_entry = FunctionProfile(
+        module="script",
+        name="<module>",
+        filename="/fake/script.py",
+        start_line=1,
+        total_time=1.0,
+        call_count=1,
+        lines=[LineProfile(lineno=1, hits=1, time=1.0, source="x = 1")],
+    )
+    stream = io.StringIO()
+    print_summary([mod_entry], stream=stream, scope="pkg")
+    output = stream.getvalue()
+    # Should NOT show the footnote since <module> is the only entry
+    assert "inclusive" not in output
+    assert "%" in output  # normal % marker, not *
+
+
 def test_wall_time_omitted_when_none():
     stream = io.StringIO()
     print_summary([_result_with_time()], stream=stream, scope="pkg")

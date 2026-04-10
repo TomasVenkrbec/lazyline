@@ -287,6 +287,53 @@ def _validate_print_options(unit: str, sort: str) -> None:
         raise ValueError(f"sort must be one of: {', '.join(_SORT_KEYS)} or omitted")
 
 
+def _print_summary_table(
+    display: list[FunctionProfile],
+    non_module: list[FunctionProfile],
+    grand_total: float,
+    tu: _TimeUnit,
+    name_width: int,
+    total_w: int,
+    tpc_w: int,
+    show_memory: bool,
+    sep: str,
+    term_width: int,
+    stream: TextIO,
+) -> bool:
+    """Print summary table rows and total.
+
+    Returns whether any ``<module>`` entry was displayed.
+    """
+    tp, dp = tu.total_prec, tu.detail_prec
+    m = tu.multiplier
+    has_module_entry = False
+    for fp in display:
+        pct = (fp.total_time / grand_total * 100) if grand_total > 0 else 0.0
+        is_module = fp.name == "<module>" and bool(non_module)
+        if is_module:
+            has_module_entry = True
+        name = _qualified_name(fp, max_len=name_width - 1)
+        mem_str = f"{sep}{_format_memory(fp.memory):>10}" if show_memory else ""
+        tpc = fp.total_time / fp.call_count if fp.call_count > 0 else 0.0
+        pct_marker = "*" if is_module else "%"
+        line = (
+            f"{name:<{name_width}}{sep}{_fmt_num(fp.total_time * m, total_w, tp)}"
+            f"{sep}{pct:>7.1f}{pct_marker}"
+        )
+        tpc_str = _fmt_num(tpc * m, tpc_w, dp)
+        print(
+            f"{line}{sep}{fp.call_count:>8}{sep}{tpc_str}{mem_str}",
+            file=stream,
+        )
+
+    print("-" * term_width, file=stream)
+    print(
+        f"{'Total':<{name_width}}{sep}{_fmt_num(grand_total * m, total_w, tp)}",
+        file=stream,
+    )
+    return has_module_entry
+
+
 def print_summary(
     results: list[FunctionProfile],
     *,
@@ -363,7 +410,18 @@ def print_summary(
         return
 
     _warn_negative_times(results)
-    grand_total = sum(fp.total_time for fp in results)
+    # Exclude <module> entries from grand total — their time is inclusive
+    # (already counted via the functions they call), so including them
+    # would inflate the total.  Fall back to full sum when every result
+    # is a <module> entry (flat scripts with no function definitions).
+    # Caveat: this under-counts direct top-level work (e.g. loops at module
+    # scope) when the module also calls profiled functions.
+    non_module = [fp for fp in results if fp.name != "<module>"]
+    grand_total = (
+        sum(fp.total_time for fp in non_module)
+        if non_module
+        else sum(fp.total_time for fp in results)
+    )
     n_called = len(results)
 
     filtered, display, empty_label = _filter_and_select(
@@ -424,28 +482,25 @@ def print_summary(
     )
     print("-" * term_width, file=stream)
 
-    tp, dp = tu.total_prec, tu.detail_prec
-    m = tu.multiplier
-    for fp in display:
-        pct = (fp.total_time / grand_total * 100) if grand_total > 0 else 0.0
-        name = _qualified_name(fp, max_len=name_width - 1)
-        mem_str = f"{sep}{_format_memory(fp.memory):>10}" if show_memory else ""
-        tpc = fp.total_time / fp.call_count if fp.call_count > 0 else 0.0
-        line = (
-            f"{name:<{name_width}}{sep}{_fmt_num(fp.total_time * m, total_w, tp)}"
-            f"{sep}{pct:>7.1f}%"
-        )
-        tpc_str = _fmt_num(tpc * m, tpc_w, dp)
+    has_module_entry = _print_summary_table(
+        display,
+        non_module,
+        grand_total,
+        tu,
+        name_width,
+        total_w,
+        tpc_w,
+        show_memory,
+        sep,
+        term_width,
+        stream,
+    )
+    if has_module_entry:
         print(
-            f"{line}{sep}{fp.call_count:>8}{sep}{tpc_str}{mem_str}",
+            "* <module> time is inclusive (includes called functions); "
+            "excluded from Total",
             file=stream,
         )
-
-    print("-" * term_width, file=stream)
-    print(
-        f"{'Total':<{name_width}}{sep}{_fmt_num(grand_total * m, total_w, tp)}",
-        file=stream,
-    )
     print("", file=stream)
 
     if summary:
