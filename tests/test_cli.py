@@ -1011,7 +1011,14 @@ def test_run_exclude_flag():
         ],
     )
     assert result.exit_code == 0
-    assert "encoder" not in result.output.lower() or "Discovered" in result.output
+    # The summary table should not list any encoder functions.
+    # Check each summary line (lines starting with "json.") for "encoder".
+    for line in result.output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("json."):
+            assert "encoder" not in stripped.lower(), (
+                f"Excluded function appeared in summary: {stripped}"
+            )
 
 
 # --- sort via run command (end-to-end) ---
