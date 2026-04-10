@@ -1,20 +1,23 @@
-# Lazyline
+# Lazyline: Zero-Config Line-Level Python Profiler
 
 [![PyPI version](https://img.shields.io/pypi/v/lazyline)](https://pypi.org/project/lazyline/)
+[![Downloads](https://img.shields.io/pypi/dm/lazyline)](https://pypi.org/project/lazyline/)
 [![Python versions](https://img.shields.io/pypi/pyversions/lazyline)](https://pypi.org/project/lazyline/)
 [![Tests](https://github.com/TomasVenkrbec/lazyline/actions/workflows/ci.yml/badge.svg)](https://github.com/TomasVenkrbec/lazyline/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/TomasVenkrbec/lazyline/graph/badge.svg)](https://codecov.io/gh/TomasVenkrbec/lazyline)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/TomasVenkrbec/lazyline/blob/main/LICENSE)
 
 **Zero-config, deterministic, line-level Python profiler.**
-No `@profile` decorators, no code changes — point it at a package or
-script and go. Subprocesses and multiprocessing pools profiled
-automatically. Find the lazy lines.
+Find slow Python code and profile it line by line — no `@profile`
+decorators, no code changes. Point it at a package or script and get
+exact hit counts and timing for every line. Subprocesses and
+multiprocessing pools profiled automatically. Find the lazy lines.
 
 ## Quick Start
 
 ```bash
 pip install lazyline
+# or: uvx lazyline
 
 # Profile a package while running its tests:
 lazyline run my_package -- pytest tests/
@@ -68,11 +71,13 @@ and it drops from O(n²) to O(n).
 > [`skills/lazyline/SKILL.md`](skills/lazyline/SKILL.md) into any
 > assistant that supports markdown skill files.
 
-## Why Lazyline?
+## Key Features
 
-Lazyline wraps [line_profiler](https://github.com/pyutils/line_profiler)
-and adds everything needed to go from "I want to profile this package"
-to "here are the bottlenecks" in a single command:
+Need to find performance bottlenecks in your Python code without
+modifying a single file? Lazyline wraps
+[line_profiler](https://github.com/pyutils/line_profiler) and adds
+everything needed to go from "I want to profile this package" to
+"here are the bottlenecks" in a single command:
 
 - **Zero configuration** — point at a package name, directory, or
   `.py` file. Every function is discovered and instrumented
@@ -85,9 +90,9 @@ to "here are the bottlenecks" in a single command:
   into a single report.
 
 - **Deterministic precision** — exact hit counts and timing for every
-  line. "This line ran 47,382 times and took 3.2s." Sampling profilers
-  give statistical approximations; lazyline gives facts. When you need
-  to distinguish O(n) from O(n²), exact counts are the difference.
+  line, not statistical estimates. "This line ran 47,382 times and
+  took 3.2s." When you need to distinguish O(n) from O(n²), exact
+  counts are the difference.
 
 - **Focused scope, clean output** — you choose exactly which package
   to profile. Unlike tools that profile everything in your working
@@ -99,12 +104,10 @@ No tool is best for everything. Pick the right one for the job:
 
 | You need... | Use | Why |
 | ------------- | ----- | ----- |
-| Exact line-level timing across a package, no code changes | **lazyline** | Deterministic tracing with auto-discovery and subprocess support |
+| Exact line-level timing across a package, no code changes | **[lazyline](https://github.com/TomasVenkrbec/lazyline)** | Deterministic tracing with auto-discovery and subprocess support |
 | Low-overhead profiling with memory, GPU, and AI suggestions | **[Scalene](https://github.com/plasma-umass/scalene)** | Sampling (~10-20% overhead), broad feature set, web UI |
 | Attach to a running process in production | **[py-spy](https://github.com/benfred/py-spy)** | Out-of-process sampling, near-zero overhead, no restart needed |
 | "Which function is slow?" with beautiful call trees | **[Pyinstrument](https://github.com/joerick/pyinstrument)** | Statistical profiler, tree output, low overhead |
-| Line-level timing for specific functions you choose | **[kernprof](https://github.com/pyutils/line_profiler)** | Deterministic, but requires `@profile` decorators |
-| Quick function-level triage, no install | **cProfile** | Stdlib, always available, function-level only |
 
 ### Feature comparison
 
@@ -194,10 +197,10 @@ into your assistant's configuration.
 
 ---
 
-Found a problem with lazyline?
-[Open an issue](https://github.com/TomasVenkrbec/lazyline/issues) and
-tell us about it, or give the project a
-[star](https://github.com/TomasVenkrbec/lazyline) if you found it useful.
+If lazyline helped you find a bottleneck, consider giving it a
+[star](https://github.com/TomasVenkrbec/lazyline) — it helps others
+discover the project. Found a problem?
+[Open an issue](https://github.com/TomasVenkrbec/lazyline/issues).
 
 ## License
 
