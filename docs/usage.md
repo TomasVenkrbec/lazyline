@@ -200,3 +200,9 @@ with no ANSI formatting.
 
 With `--memory`, an additional `Net Mem` column shows per-line
 net memory allocation delta (bytes allocated minus freed).
+
+> **Note:** `tracemalloc` adds significant overhead on allocation-heavy
+> code (up to 20x+), which distorts timing data. For accurate timing,
+> profile without `--memory` first. See
+> [How It Works — Memory mode overhead](how-it-works.md#memory-mode-overhead)
+> for details.
