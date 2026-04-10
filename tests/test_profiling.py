@@ -218,6 +218,29 @@ def test_execute_command_nonzero_exit_returns_code(tmp_path):
     assert execute_command(profiler, ["python", str(script)]) == 42
 
 
+def test_execute_command_enum_exit_code(tmp_path):
+    """Enum exit codes (e.g. pytest ExitCode) should resolve to int."""
+    script = tmp_path / "enum_exit.py"
+    script.write_text(
+        "import enum, sys\n"
+        "class ExitCode(enum.IntEnum):\n"
+        "    TESTS_FAILED = 1\n"
+        "sys.exit(ExitCode.TESTS_FAILED)\n"
+    )
+    profiler = create_profiler()
+    code = execute_command(profiler, ["python", str(script)])
+    assert code == 1
+    assert isinstance(code, int)
+
+
+def test_execute_command_string_exit_code(tmp_path):
+    """String exit codes should map to 1."""
+    script = tmp_path / "str_exit.py"
+    script.write_text("import sys; sys.exit('error message')\n")
+    profiler = create_profiler()
+    assert execute_command(profiler, ["python", str(script)]) == 1
+
+
 def test_execute_command_exception_returns_1(tmp_path):
     script = tmp_path / "crashes.py"
     script.write_text("raise RuntimeError('boom')\n")

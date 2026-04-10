@@ -257,8 +257,9 @@ def execute_command(profiler: LineProfiler, command: list[str]) -> int:
     except SystemExit as exc:
         code = exc.code
         if code is not None and code != 0:
-            logger.warning("Command exited with code %s.", code)
-            exit_code = code if isinstance(code, int) else 1
+            numeric = int(code) if isinstance(code, int) else getattr(code, "value", 1)
+            logger.warning("Command exited with code %s.", numeric)
+            exit_code = numeric if isinstance(numeric, int) else 1
     except KeyboardInterrupt:
         logger.warning("Command interrupted by user.")
         exit_code = 130
