@@ -31,6 +31,9 @@ htmlcov/
 .env
 .env.*
 
+# Devcontainer
+.devcontainer/
+
 # OS
 .DS_Store
 Thumbs.db

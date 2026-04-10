@@ -22,9 +22,12 @@ keywords = [
     "subprocess-profiling",
     "multiprocessing",
     "cli",
+    "developer-tools",
+    "debugging",
+    "code-optimization",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
@@ -47,6 +50,7 @@ dependencies = ["typer>=0.15", "line_profiler>=4.1.0", "Pygments>=2.14.0"]
 lazyline = "lazyline.__main__:app"
 
 [project.urls]
+Homepage = "https://github.com/TomasVenkrbec/lazyline"
 Repository = "https://github.com/TomasVenkrbec/lazyline"
 Documentation = "https://github.com/TomasVenkrbec/lazyline/blob/main/docs/usage.md"
 Changelog = "https://github.com/TomasVenkrbec/lazyline/blob/main/CHANGELOG.md"

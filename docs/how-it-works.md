@@ -1,6 +1,7 @@
 # How It Works
 
-[← Back to README](../README.md)
+[← Back to README](../README.md) ·
+[Usage Guide](usage.md)
 
 ## Profiling Pipeline
 

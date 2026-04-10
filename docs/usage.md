@@ -1,6 +1,7 @@
 # Usage Guide
 
-[← Back to README](../README.md)
+[← Back to README](../README.md) ·
+[How It Works](how-it-works.md)
 
 ## CLI Reference
 
