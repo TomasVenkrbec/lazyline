@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -1063,3 +1064,52 @@ def test_exclude_after_scope_before_separator():
         ],
     )
     assert result.exit_code == 0
+
+
+# --- CWD on sys.path (local package discovery) ---
+
+
+def test_run_discovers_local_package_not_on_sys_path(tmp_path, monkeypatch):
+    """A local package in CWD should be discoverable even without pip install."""
+    pkg = tmp_path / "localpkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "core.py").write_text("def greet():\n    return 'hello'\n")
+    script = tmp_path / "runner.py"
+    script.write_text("from localpkg.core import greet\ngreet()\n")
+    monkeypatch.chdir(tmp_path)
+    # Remove tmp_path from sys.path if present to simulate console-script launch
+    monkeypatch.setattr(
+        "sys.path",
+        [p for p in sys.path if p not in (str(tmp_path), "")],
+    )
+    result = runner.invoke(
+        app,
+        ["run", "localpkg", "--", "python", str(script)],
+    )
+    assert result.exit_code == 0
+    assert "Discovered" in result.output
+    assert "localpkg" in result.output
+
+
+def test_ensure_cwd_on_path_idempotent(monkeypatch):
+    """Calling _ensure_cwd_on_path twice should not add duplicate entries."""
+    from lazyline.__main__ import _ensure_cwd_on_path
+
+    monkeypatch.setattr(
+        "sys.path",
+        [p for p in sys.path if p not in (str(Path.cwd()), "")],
+    )
+    _ensure_cwd_on_path()
+    count_before = sys.path.count("")
+    _ensure_cwd_on_path()
+    assert sys.path.count("") == count_before
+
+
+def test_ensure_cwd_on_path_noop_when_already_present(monkeypatch):
+    """If CWD is already on sys.path, nothing should be added."""
+    from lazyline.__main__ import _ensure_cwd_on_path
+
+    monkeypatch.setattr("sys.path", ["", "/other"])
+    _ensure_cwd_on_path()
+    assert sys.path == ["", "/other"]

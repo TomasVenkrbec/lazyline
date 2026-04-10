@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   profiling, interpretation, and optimization.
 - Claude Code plugin (`.claude-plugin/`) for distributing the skill
   via the plugin marketplace.
+- Automatic insertion of cwd into sys.path if not present.
 
 ### Changed
 

@@ -474,8 +474,21 @@ def show(
 # --- Profiling pipeline ---
 
 
+def _ensure_cwd_on_path() -> None:
+    """Ensure the current working directory is on ``sys.path``.
+
+    ``python -m`` adds ``""`` (CWD) to ``sys.path[0]``, but console
+    scripts do not.  Without this, local packages that are not
+    pip-installed cannot be discovered via ``importlib.import_module``.
+    """
+    cwd = str(Path.cwd())
+    if "" not in sys.path and cwd not in sys.path:
+        sys.path.insert(0, "")
+
+
 def _discover_all(scopes: list[str]) -> list[ModuleType]:
     """Discover modules from one or more scopes, deduplicating by name."""
+    _ensure_cwd_on_path()
     seen: set[str] = set()
     modules = []
     for scope in scopes:
