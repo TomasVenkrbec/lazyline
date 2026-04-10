@@ -233,6 +233,7 @@ def _print_header_block(
     stream: TextIO,
     is_tty: bool = False,
     wall_time: float | None = None,
+    has_parallel: bool = False,
 ) -> None:
     """Print the results header block (scope, coverage, total, unit)."""
     if n_registered is not None:
@@ -263,7 +264,12 @@ def _print_header_block(
         f"  {coverage} | {total_label}: {total_str}{wall_str} | Unit: {unit_str}",
         file=stream,
     )
-    if wall_time is not None and wall_time > 0 and grand_total > wall_time * 1.5:
+    if (
+        has_parallel
+        and wall_time is not None
+        and wall_time > 0
+        and grand_total > wall_time * 1.5
+    ):
         print("  (total includes parallel worker time)", file=stream)
     elif wall_time is not None and wall_time > 0 and grand_total < wall_time * 0.5:
         print(
@@ -296,6 +302,7 @@ def print_summary(
     scope: str | None = None,
     n_registered: int | None = None,
     wall_time: float | None = None,
+    has_parallel: bool = False,
 ) -> None:
     """Print a ranked summary of profiling results.
 
@@ -328,6 +335,9 @@ def print_summary(
         Total registered functions for coverage display (``N of M``).
     wall_time
         Wall-clock execution time in seconds, displayed in the header.
+    has_parallel
+        Whether parallel worker or subprocess stats were collected.
+        Controls the "total includes parallel worker time" note.
     """
     _validate_print_options(unit, sort)
 
@@ -391,6 +401,7 @@ def print_summary(
             stream,
             tty,
             wall_time,
+            has_parallel,
         )
 
     total_hdr = f"Total ({tu.label})"

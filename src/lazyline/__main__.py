@@ -338,7 +338,9 @@ def run(
     )
     opts.validate()
 
-    results, exit_code, n_registered, wall_time = _profile(scopes, command, opts)
+    results, exit_code, n_registered, wall_time, has_parallel = _profile(
+        scopes, command, opts
+    )
 
     report_stream = (
         sys.stderr
@@ -358,6 +360,7 @@ def run(
         scope=scope_label,
         n_registered=n_registered,
         wall_time=wall_time,
+        has_parallel=has_parallel,
         stream=report_stream,
     )
 
@@ -501,7 +504,7 @@ def _discover_all(scopes: list[str]) -> list[ModuleType]:
 
 def _profile(
     scopes: list[str], command: list[str], opts: _DisplayOptions
-) -> tuple[list[FunctionProfile], int, int, float]:
+) -> tuple[list[FunctionProfile], int, int, float, bool]:
     """Run the profiling pipeline: discover, register, execute, collect."""
     modules = _discover_all(scopes)
     if not modules:
@@ -545,6 +548,7 @@ def _profile(
     wall_time = time.monotonic() - wall_start
 
     mem_stats = stop_tracking(mem_before)
+    has_parallel = worker_holder.stats is not None or sub_holder.stats is not None
     stats = merge_stats(profiler.get_stats(), worker_holder.stats)
     if sub_holder.stats:
         stats = merge_stats(stats, sub_holder.stats)
@@ -554,7 +558,7 @@ def _profile(
         _warn_high_hit_functions(results)
         if not results:
             _print_no_data_hint(exit_code, n_registered)
-    return results, exit_code, n_registered, wall_time
+    return results, exit_code, n_registered, wall_time, has_parallel
 
 
 def _export_results(

@@ -1177,13 +1177,14 @@ def test_shorten_path_ambiguous_root_uses_last():
 
 
 def test_parallel_worker_time_note():
-    """Show parallel note when total >> wall time."""
+    """Show parallel note when total >> wall time and parallel data exists."""
     stream = io.StringIO()
     print_summary(
         [_result_with_time(total_time=120.0)],
         stream=stream,
         scope="pkg",
         wall_time=30.0,
+        has_parallel=True,
     )
     assert "parallel worker time" in stream.getvalue()
 
@@ -1196,6 +1197,20 @@ def test_no_parallel_note_when_times_close():
         stream=stream,
         scope="pkg",
         wall_time=28.0,
+        has_parallel=True,
+    )
+    assert "parallel worker time" not in stream.getvalue()
+
+
+def test_no_parallel_note_without_parallel_data():
+    """No parallel note when total >> wall due to inclusive timing, not workers."""
+    stream = io.StringIO()
+    print_summary(
+        [_result_with_time(total_time=120.0)],
+        stream=stream,
+        scope="pkg",
+        wall_time=30.0,
+        has_parallel=False,
     )
     assert "parallel worker time" not in stream.getvalue()
 
