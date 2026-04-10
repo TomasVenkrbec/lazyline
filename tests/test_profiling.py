@@ -63,6 +63,27 @@ def test_parse_command_flags_before_script():
     assert (runner, target, extra) == ("script", "run.py", ["--arg"])
 
 
+def test_parse_command_W_flag_consumes_argument():
+    runner, target, extra = _parse_command(
+        ["python", "-W", "ignore", "-m", "pytest", "-v"]
+    )
+    assert (runner, target, extra) == ("module", "pytest", ["-v"])
+
+
+def test_parse_command_X_flag_consumes_argument():
+    runner, target, extra = _parse_command(
+        ["python", "-X", "utf8", "script.py", "--arg"]
+    )
+    assert (runner, target, extra) == ("script", "script.py", ["--arg"])
+
+
+def test_parse_command_mixed_no_arg_and_with_arg_flags():
+    runner, target, extra = _parse_command(
+        ["python", "-u", "-W", "error", "-B", "-X", "dev", "-m", "mymod"]
+    )
+    assert (runner, target, extra) == ("module", "mymod", [])
+
+
 def test_parse_command_empty_after_strip():
     with pytest.raises(ValueError, match="Empty command"):
         _parse_command(["python"])
