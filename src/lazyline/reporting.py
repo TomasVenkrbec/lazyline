@@ -146,7 +146,13 @@ def _get_width(stream: TextIO, width: int | None) -> int:
 
 
 def _is_tty(stream: TextIO) -> bool:
-    """Check whether the output stream is connected to a terminal."""
+    """Check whether ANSI formatting should be used.
+
+    Returns ``False`` when the ``NO_COLOR`` environment variable is set
+    (any value), following the https://no-color.org/ convention.
+    """
+    if os.environ.get("NO_COLOR") is not None:
+        return False
     try:
         return stream.isatty()
     except AttributeError:
@@ -599,6 +605,8 @@ def _print_function_detail(
     print("-" * term_width, file=stream)
 
     lines = _prepare_lines(fp, compact)
+    # Find the hottest line (highest time among hit lines) for visual marking.
+    hottest_lineno = _find_hottest_lineno(lines)
     for i, lp in enumerate(lines):
         if lp is _ELLIPSIS_SENTINEL:
             _print_ellipsis(stream, show_memory, time_w, tph_w, dsep)
@@ -608,6 +616,7 @@ def _print_function_detail(
             assert isinstance(lp, LineProfile)
             is_def_line = lp.source.lstrip().startswith(("def ", "async def "))
             dim_unhit = is_tty and not (compact and (i == 0 or is_def_line))
+            is_hot = is_tty and lp.lineno == hottest_lineno
             _print_line(
                 lp,
                 func_total,
@@ -620,6 +629,7 @@ def _print_function_detail(
                 dim_unhit,
                 lexer,
                 formatter,
+                is_hot,
             )
 
     print("", file=stream)
@@ -627,6 +637,17 @@ def _print_function_detail(
 
 
 _ELLIPSIS_SENTINEL = object()
+
+
+def _find_hottest_lineno(lines: list[LineProfile | object]) -> int | None:
+    """Return the lineno of the line with the most time, or None."""
+    best_time = 0.0
+    best_lineno: int | None = None
+    for lp in lines:
+        if isinstance(lp, LineProfile) and lp.hits > 0 and lp.time > best_time:
+            best_time = lp.time
+            best_lineno = lp.lineno
+    return best_lineno
 
 
 def _flush_unhit(buffer: list[LineProfile], result: list[LineProfile | object]) -> None:
@@ -744,6 +765,7 @@ def _print_line(
     dim_unhit: bool = False,
     lexer: Lexer | None = None,
     formatter: Formatter | None = None,
+    is_hot: bool = False,
 ) -> None:
     """Print a single profiled line (hit or non-hit)."""
     if lp.hits > 0:
@@ -755,7 +777,9 @@ def _print_line(
         t_str = _fmt_num(lp.time * m, time_w, dp)
         h_str = _fmt_num(tph * m, tph_w, dp)
         source = _highlight_source(lp.source, lexer, formatter)
-        cols = f"{lp.lineno:>6}{dsep}{lp.hits:>8}{dsep}{t_str}{dsep}{h_str}"
+        # Mark the hottest line with >> prefix (TTY only, via is_hot).
+        prefix = f"{_BOLD_START}>>{_BOLD_END}" if is_hot else "  "
+        cols = f"{prefix}{lp.lineno:>4}{dsep}{lp.hits:>8}{dsep}{t_str}{dsep}{h_str}"
         print(f"{cols}{dsep}{pct:>7.1f}%{mem_str}{dsep}{source}", file=stream)
     else:
         # Use plain separators for un-hit lines so the outer dim ANSI is

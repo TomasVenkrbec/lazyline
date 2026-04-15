@@ -612,8 +612,8 @@ def test_run_with_invalid_unit():
         app,
         ["run", "--unit", "invalid", "json", "--", "python", "-c", "pass"],
     )
-    assert result.exit_code == 1
-    assert "--unit must be one of" in result.output
+    assert result.exit_code != 0
+    assert "invalid" in result.output.lower()
 
 
 def test_run_with_unit_auto():
@@ -839,8 +839,8 @@ def test_sort_by_calls(tmp_path):
 
 def test_sort_invalid_value():
     result = runner.invoke(app, ["show", "/dev/null", "--sort", "invalid"])
-    assert result.exit_code == 1
-    assert "--sort must be one of" in result.output
+    assert result.exit_code != 0
+    assert "invalid" in result.output.lower()
 
 
 # --- no-subprocess / no-multiprocessing flags ---
@@ -888,8 +888,8 @@ def test_run_with_invalid_sort():
         app,
         ["run", "--sort", "invalid", "json", "--", "python", "-c", "pass"],
     )
-    assert result.exit_code == 1
-    assert "--sort must be one of" in result.output
+    assert result.exit_code != 0
+    assert "invalid" in result.output.lower()
 
 
 def test_run_sort_after_scope():
@@ -917,16 +917,16 @@ def test_show_with_invalid_unit(tmp_path):
     path = tmp_path / "results.json"
     _write_sample_json(path)
     result = runner.invoke(app, ["show", str(path), "--unit", "invalid"])
-    assert result.exit_code == 1
-    assert "--unit must be one of" in result.output
+    assert result.exit_code != 0
+    assert "invalid" in result.output.lower()
 
 
 def test_show_with_invalid_sort(tmp_path):
     path = tmp_path / "results.json"
     _write_sample_json(path)
     result = runner.invoke(app, ["show", str(path), "--sort", "invalid"])
-    assert result.exit_code == 1
-    assert "--sort must be one of" in result.output
+    assert result.exit_code != 0
+    assert "invalid" in result.output.lower()
 
 
 # --- _reparse_options edge cases ---
@@ -1071,6 +1071,73 @@ def test_exclude_after_scope_before_separator():
         ],
     )
     assert result.exit_code == 0
+
+
+# --- show-uncalled flag ---
+
+
+def test_show_uncalled_lists_uncalled_functions():
+    """--show-uncalled should list registered but uncalled functions."""
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--show-uncalled",
+            "json",
+            "--",
+            "python",
+            "-c",
+            "import json; json.dumps(1)",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Uncalled functions" in result.output
+
+
+def test_show_uncalled_does_not_flag_called_methods(tmp_path, monkeypatch):
+    """Called class methods must not appear in the uncalled list.
+
+    Regression guard: results use ``co_name`` (short name), so the
+    registered-name comparison must also use ``__name__`` — using
+    ``__qualname__`` (``Class.method``) would make every called method
+    look uncalled.
+    """
+    pkg = tmp_path / "uncalled_pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "mod.py").write_text(
+        "class Widget:\n"
+        "    def called_method(self):\n"
+        "        return 1\n"
+        "    def unused_method(self):\n"
+        "        return 2\n"
+    )
+    script = tmp_path / "runner.py"
+    script.write_text("from uncalled_pkg.mod import Widget\nWidget().called_method()\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.path", [p for p in sys.path if p not in (str(tmp_path), "")]
+    )
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--show-uncalled",
+                "uncalled_pkg",
+                "--",
+                "python",
+                str(script),
+            ],
+        )
+    finally:
+        for key in list(sys.modules):
+            if key == "uncalled_pkg" or key.startswith("uncalled_pkg."):
+                del sys.modules[key]
+    assert result.exit_code == 0, result.output
+    _, _, uncalled_block = result.output.partition("Uncalled functions")
+    assert "called_method" not in uncalled_block, uncalled_block
+    assert "unused_method" in uncalled_block, uncalled_block
 
 
 # --- CWD on sys.path (local package discovery) ---

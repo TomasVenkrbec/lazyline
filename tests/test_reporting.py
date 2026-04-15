@@ -1135,6 +1135,16 @@ def test_emoji_suppressed_in_non_tty():
     assert "Lazyline results for pkg" in output
 
 
+def test_no_color_env_disables_ansi(monkeypatch):
+    """NO_COLOR env var should suppress all ANSI formatting."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    stream = io.StringIO()
+    stream.isatty = lambda: True  # type: ignore[assignment]
+    print_summary([_result_with_time()], stream=stream, scope="pkg")
+    output = stream.getvalue()
+    assert "\033[" not in output
+
+
 def test_wall_time_in_header():
     stream = io.StringIO()
     print_summary(
@@ -1584,6 +1594,42 @@ def test_no_highlighting_in_non_tty():
     print_summary(results, stream=stream, width=120)
     output = stream.getvalue()
     assert "\x1b[" not in output
+
+
+def test_hottest_line_marker_in_tty():
+    """The hottest line should have a >> marker in TTY mode."""
+    fp = FunctionProfile(
+        module="mod",
+        name="func",
+        filename="/fake/mod.py",
+        start_line=1,
+        total_time=1.0,
+        call_count=1,
+        lines=[
+            LineProfile(lineno=1, hits=0, time=0.0, source="def func():"),
+            LineProfile(lineno=2, hits=1, time=0.1, source="    x = 1"),
+            LineProfile(lineno=3, hits=1, time=0.9, source="    y = slow()"),
+        ],
+    )
+    stream = _tty_stream()
+    print_summary([fp], stream=stream, width=120)
+    output = stream.getvalue()
+    # Line 3 is the hottest — should have >> marker
+    # Use the 90% indicator to find the right line (line 3 has 90% of time)
+    for line in output.splitlines():
+        if "90.0%" in line:
+            assert ">>" in line, f"Missing >> on hottest line: {line}"
+            break
+    else:
+        raise AssertionError("90.0% line not found in output")
+
+
+def test_no_hottest_marker_in_non_tty():
+    """Non-tty output should not have >> markers."""
+    results = [_result_with_time()]
+    stream = io.StringIO()
+    print_summary(results, stream=stream, width=120)
+    assert ">>" not in stream.getvalue()
 
 
 # --- _normalize_patterns tests ---

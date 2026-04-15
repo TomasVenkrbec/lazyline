@@ -12,6 +12,9 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Annotated, Final
 
+    from line_profiler import LineProfiler
+
+import click
 import typer
 
 from lazyline import __version__
@@ -55,8 +58,10 @@ _BOOL_TRUE_FLAGS: Final[dict[str, str]] = {
     "--memory": "memory",
     "--compact": "compact",
     "--summary": "summary",
+    "-s": "summary",
     "--quiet": "quiet",
     "-q": "quiet",
+    "--show-uncalled": "show_uncalled",
     "--no-subprocess": "no_subprocess",
     "--no-multiprocessing": "no_multiprocessing",
 }
@@ -104,6 +109,7 @@ class _DisplayOptions:
     unit: str = "auto"
     exclude_pattern: str | None = None
     sort: str = "time"
+    show_uncalled: bool = False
     no_subprocess: bool = False
     no_multiprocessing: bool = False
 
@@ -231,13 +237,15 @@ def main(
 @app.command(
     context_settings={"allow_extra_args": True, "allow_interspersed_args": False},
     no_args_is_help=True,
+    options_metavar="[OPTIONS]",
 )
 def run(
     ctx: typer.Context,
     scope: Annotated[
         str,
         typer.Argument(
-            help="Package path, module name, directory, or .py file to profile"
+            help="Package path, module name, directory, or .py file to profile",
+            metavar="SCOPE [SCOPE...] -- COMMAND [ARGS...]",
         ),
     ],
     top: Annotated[
@@ -261,7 +269,7 @@ def run(
     summary: Annotated[
         bool,
         typer.Option(
-            "--summary", help="Print only the summary table, no per-line detail"
+            "--summary", "-s", help="Print only the summary table, no per-line detail"
         ),
     ] = False,
     quiet: Annotated[
@@ -280,7 +288,11 @@ def run(
     ] = None,
     unit: Annotated[
         str,
-        typer.Option("--unit", help="Time unit: auto, s, ms, us, or ns"),
+        typer.Option(
+            "--unit",
+            help="Time display unit",
+            click_type=click.Choice(list(_VALID_UNITS_DISPLAY), case_sensitive=False),
+        ),
     ] = "auto",
     exclude_pattern: Annotated[
         str | None,
@@ -293,9 +305,15 @@ def run(
     sort: Annotated[
         str,
         typer.Option(
-            "--sort", help="Sort by: time (default), calls, time-per-call, name"
+            "--sort",
+            help="Sort order",
+            click_type=click.Choice(list(_VALID_SORTS_DISPLAY), case_sensitive=False),
         ),
     ] = "time",
+    show_uncalled: Annotated[
+        bool,
+        typer.Option("--show-uncalled", help="List registered but uncalled functions"),
+    ] = False,
     no_subprocess: Annotated[
         bool,
         typer.Option("--no-subprocess", help="Disable subprocess profiling injection"),
@@ -309,7 +327,7 @@ def run(
 ) -> None:
     """Profile a command, instrumenting all functions in the given scope(s).
 
-    Usage: lazyline run [OPTIONS] SCOPE [SCOPE...] -- COMMAND [ARGS]
+    The -- separator between SCOPE and COMMAND is required.
 
     Examples
     --------
@@ -332,14 +350,15 @@ def run(
             unit=unit,
             exclude_pattern=exclude_pattern,
             sort=sort,
+            show_uncalled=show_uncalled,
             no_subprocess=no_subprocess,
             no_multiprocessing=no_multiprocessing,
         ),
     )
     opts.validate()
 
-    results, exit_code, n_registered, wall_time, has_parallel = _profile(
-        scopes, command, opts
+    results, exit_code, n_registered, wall_time, has_parallel, registered_names = (
+        _profile(scopes, command, opts)
     )
 
     report_stream = (
@@ -363,6 +382,15 @@ def run(
         has_parallel=has_parallel,
         stream=report_stream,
     )
+
+    if opts.show_uncalled and registered_names:
+        called = {f"{fp.module}.{fp.name}" for fp in results}
+        uncalled = sorted(registered_names - called)
+        if uncalled:
+            stream = report_stream or sys.stdout
+            print(f"\nUncalled functions ({len(uncalled)}):", file=stream)
+            for name in uncalled:
+                print(f"  {name}", file=stream)
 
     if opts.output is not None:
         _export_results(
@@ -390,7 +418,7 @@ def show(
     summary: Annotated[
         bool,
         typer.Option(
-            "--summary", help="Print only the summary table, no per-line detail"
+            "--summary", "-s", help="Print only the summary table, no per-line detail"
         ),
     ] = False,
     filter_pattern: Annotated[
@@ -403,13 +431,15 @@ def show(
     ] = None,
     quiet: Annotated[
         bool,
-        typer.Option(
-            "--quiet", "-q", help="Suppress discovery and registration messages"
-        ),
+        typer.Option("--quiet", "-q", help="Suppress high-hit-count warnings"),
     ] = False,
     unit: Annotated[
         str,
-        typer.Option("--unit", help="Time unit: auto, s, ms, us, or ns"),
+        typer.Option(
+            "--unit",
+            help="Time display unit",
+            click_type=click.Choice(list(_VALID_UNITS_DISPLAY), case_sensitive=False),
+        ),
     ] = "auto",
     exclude_pattern: Annotated[
         str | None,
@@ -422,7 +452,9 @@ def show(
     sort: Annotated[
         str,
         typer.Option(
-            "--sort", help="Sort by: time (default), calls, time-per-call, name"
+            "--sort",
+            help="Sort order",
+            click_type=click.Choice(list(_VALID_SORTS_DISPLAY), case_sensitive=False),
         ),
     ] = "time",
 ) -> None:
@@ -502,9 +534,24 @@ def _discover_all(scopes: list[str]) -> list[ModuleType]:
     return modules
 
 
+def _get_registered_names(profiler: LineProfiler) -> set[str]:
+    """Extract ``module.name`` identifiers from all registered profiler functions.
+
+    Uses ``__name__`` rather than ``__qualname__`` because
+    :class:`FunctionProfile` stores the code object's ``co_name`` (short
+    name), so qualnames like ``Class.method`` would spuriously never match.
+    """
+    names: set[str] = set()
+    for f in profiler.functions:  # ty: ignore[unresolved-attribute]
+        mod = getattr(f, "__module__", "") or ""
+        name = getattr(f, "__name__", "")
+        names.add(f"{mod}.{name}")
+    return names
+
+
 def _profile(
     scopes: list[str], command: list[str], opts: _DisplayOptions
-) -> tuple[list[FunctionProfile], int, int, float, bool]:
+) -> tuple[list[FunctionProfile], int, int, float, bool, set[str]]:
     """Run the profiling pipeline: discover, register, execute, collect."""
     modules = _discover_all(scopes)
     if not modules:
@@ -518,6 +565,7 @@ def _profile(
     scope_files = build_scope_paths(modules)
     n_registered = register_modules(profiler, modules)
     n_registered += register_module_level_code(profiler, modules, scopes)
+    registered_names = _get_registered_names(profiler)
     if not opts.quiet:
         typer.echo(f"Registered {n_registered} function(s) for profiling.", err=True)
 
@@ -558,7 +606,7 @@ def _profile(
         _warn_high_hit_functions(results)
         if not results:
             _print_no_data_hint(exit_code, n_registered)
-    return results, exit_code, n_registered, wall_time, has_parallel
+    return results, exit_code, n_registered, wall_time, has_parallel, registered_names
 
 
 def _export_results(
