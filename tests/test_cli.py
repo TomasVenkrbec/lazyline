@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -1187,3 +1188,195 @@ def test_ensure_cwd_on_path_noop_when_already_present(monkeypatch):
     monkeypatch.setattr("sys.path", ["", "/other"])
     _ensure_cwd_on_path()
     assert sys.path == ["", "/other"]
+
+
+# --- --extra-paths flag ---
+
+
+def test_extra_paths_enables_discovery_from_src_layout(tmp_path, monkeypatch):
+    """--extra-paths src should make a src-layout package discoverable."""
+    (tmp_path / "src" / "extrapkg").mkdir(parents=True)
+    (tmp_path / "src" / "extrapkg" / "__init__.py").write_text("")
+    (tmp_path / "src" / "extrapkg" / "core.py").write_text(
+        "def greet():\n    return 'hi'\n"
+    )
+    script = tmp_path / "runner.py"
+    script.write_text("from extrapkg.core import greet\ngreet()\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.path", [p for p in sys.path if p not in (str(tmp_path), "")]
+    )
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--extra-paths",
+                "src",
+                "extrapkg",
+                "--",
+                "python",
+                str(script),
+            ],
+        )
+    finally:
+        for key in list(sys.modules):
+            if key == "extrapkg" or key.startswith("extrapkg."):
+                del sys.modules[key]
+    assert result.exit_code == 0, result.output
+    assert "Discovered" in result.output
+    assert "extrapkg" in result.output
+
+
+def test_extra_paths_is_repeatable(tmp_path, monkeypatch):
+    """--extra-paths can be passed multiple times to add several directories."""
+    for name in ("pkg_a", "pkg_b"):
+        (tmp_path / name / "inner").mkdir(parents=True)
+        (tmp_path / name / "inner" / "__init__.py").write_text("")
+        (tmp_path / name / "inner" / "mod.py").write_text("X = 1\n")
+    script = tmp_path / "runner.py"
+    script.write_text("from inner import mod\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.path", [p for p in sys.path if p not in (str(tmp_path), "")]
+    )
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--extra-paths",
+                str(tmp_path / "pkg_a"),
+                "--extra-paths",
+                str(tmp_path / "pkg_b"),
+                "inner",
+                "--",
+                "python",
+                str(script),
+            ],
+        )
+    finally:
+        for key in list(sys.modules):
+            if key == "inner" or key.startswith("inner."):
+                del sys.modules[key]
+    assert result.exit_code == 0, result.output
+    assert "Discovered" in result.output
+
+
+def test_extra_paths_restores_sys_path_and_pythonpath(tmp_path, monkeypatch):
+    """The context manager must clean up sys.path and PYTHONPATH on exit."""
+    from lazyline.__main__ import _extra_paths_installed
+
+    original_sys_path = list(sys.path)
+    orig_pythonpath = os.environ.get("PYTHONPATH")
+
+    target = tmp_path / "some_dir"
+    target.mkdir()
+    with _extra_paths_installed([str(target)]):
+        assert str(target.resolve()) in sys.path
+        assert str(target.resolve()) in os.environ["PYTHONPATH"]
+
+    assert sys.path == original_sys_path
+    assert os.environ.get("PYTHONPATH") == orig_pythonpath
+
+
+def test_extra_paths_context_noop_on_empty():
+    """Passing None or [] must not touch sys.path or PYTHONPATH."""
+    from lazyline.__main__ import _extra_paths_installed
+
+    original_sys_path = list(sys.path)
+    orig_pythonpath = os.environ.get("PYTHONPATH")
+    with _extra_paths_installed(None):
+        assert sys.path == original_sys_path
+    with _extra_paths_installed([]):
+        assert sys.path == original_sys_path
+    assert os.environ.get("PYTHONPATH") == orig_pythonpath
+
+
+def test_extra_paths_preserves_existing_pythonpath(tmp_path, monkeypatch):
+    """Existing PYTHONPATH entries must be preserved (prepended, not replaced)."""
+    from lazyline.__main__ import _extra_paths_installed
+
+    monkeypatch.setenv("PYTHONPATH", "/existing/path")
+    target = tmp_path / "new_dir"
+    target.mkdir()
+    with _extra_paths_installed([str(target)]):
+        current = os.environ["PYTHONPATH"]
+        assert str(target.resolve()) in current
+        assert "/existing/path" in current
+        # New entry comes first.
+        assert current.index(str(target.resolve())) < current.index("/existing/path")
+
+
+def test_reparse_extra_paths_between_scopes():
+    """--extra-paths appearing between scopes is parsed and accumulated."""
+    from lazyline.__main__ import _reparse_options
+
+    result = _reparse_options(
+        ["--extra-paths", "src", "--extra-paths", "vendor"], _DisplayOptions()
+    )
+    assert result.extra_paths == ["src", "vendor"]
+
+
+def test_reparse_extra_paths_appends_to_existing():
+    """--extra-paths between scopes appends to CLI-level extra_paths."""
+    from lazyline.__main__ import _reparse_options
+
+    result = _reparse_options(
+        ["--extra-paths", "vendor"], _DisplayOptions(extra_paths=["src"])
+    )
+    assert result.extra_paths == ["src", "vendor"]
+
+
+# --- No-modules-found hint ---
+
+
+def test_no_modules_hint_suggests_extra_paths(tmp_path, monkeypatch):
+    """'No modules found' error should point at --extra-paths / PYTHONPATH."""
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(
+        app, ["run", "nonexistent_xyz_abc", "--", "python", "-c", "pass"]
+    )
+    assert result.exit_code == 1
+    assert "No modules found" in result.output
+    assert "--extra-paths" in result.output or "PYTHONPATH" in result.output
+
+
+def test_no_modules_hint_detects_src_layout(tmp_path, monkeypatch):
+    """When src/<scope> exists, the hint should explicitly recommend src."""
+    (tmp_path / "src" / "srctarget").mkdir(parents=True)
+    (tmp_path / "src" / "srctarget" / "__init__.py").write_text("")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.path", [p for p in sys.path if p not in (str(tmp_path), "")]
+    )
+    try:
+        result = runner.invoke(app, ["run", "srctarget", "--", "python", "-c", "pass"])
+    finally:
+        for key in list(sys.modules):
+            if key == "srctarget" or key.startswith("srctarget."):
+                del sys.modules[key]
+    assert result.exit_code == 1
+    assert "No modules found" in result.output
+    assert "--extra-paths src" in result.output
+
+
+def test_no_modules_hint_mentions_configured_extra_paths(tmp_path, monkeypatch):
+    """When --extra-paths is set but discovery still fails, hint echoes the paths."""
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--extra-paths",
+            "nowhere",
+            "missing_pkg_abc",
+            "--",
+            "python",
+            "-c",
+            "pass",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "No modules found" in result.output
+    assert "nowhere" in result.output

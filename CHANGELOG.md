@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Claude Code plugin (`.claude-plugin/`) for distributing the skill
   via the plugin marketplace.
 - Automatic insertion of cwd into sys.path if not present.
+- `--extra-paths` flag that prepends directories to `sys.path` and `PYTHONPATH`
+  before discovery.
 
 ### Changed
 

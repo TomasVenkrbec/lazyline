@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import platform
 import sys
 import time
@@ -10,7 +11,10 @@ from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Annotated, Final
+from typing import TYPE_CHECKING, Annotated, Final
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
     from line_profiler import LineProfiler
 
@@ -80,7 +84,10 @@ _ARG_FLAGS: Final[dict[str, str]] = {
     "--exclude": "exclude_pattern",
     "-e": "exclude_pattern",
     "--sort": "sort",
+    "--extra-paths": "extra_paths",
 }
+# Flags whose values accumulate into a list instead of replacing.
+_LIST_ARG_FIELDS: Final[frozenset[str]] = frozenset({"extra_paths"})
 
 
 # --- Helpers ---
@@ -112,6 +119,7 @@ class _DisplayOptions:
     show_uncalled: bool = False
     no_subprocess: bool = False
     no_multiprocessing: bool = False
+    extra_paths: list[str] | None = None
 
     def validate(self) -> None:
         """Validate options, raising ``typer.Exit`` on error."""
@@ -179,6 +187,9 @@ def _reparse_options(tokens: list[str], defaults: _DisplayOptions) -> _DisplayOp
                     )
             elif key == "output":
                 vals[key] = Path(raw)
+            elif key in _LIST_ARG_FIELDS:
+                existing = vals[key] or []
+                vals[key] = [*existing, raw]
             else:
                 vals[key] = raw
             i += 2
@@ -324,6 +335,16 @@ def run(
             "--no-multiprocessing", help="Disable multiprocessing worker profiling"
         ),
     ] = False,
+    extra_paths: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--extra-paths",
+            help=(
+                "Directory to prepend to sys.path before discovery. "
+                "Repeat to add multiple (e.g. --extra-paths src --extra-paths vendor)."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Profile a command, instrumenting all functions in the given scope(s).
 
@@ -334,6 +355,7 @@ def run(
       lazyline run json -- python -c "import json; json.dumps(1)"
       lazyline run --top 5 --memory my_package -- pytest tests/
       lazyline run --output results.json my_package -- pytest -q
+      lazyline run --extra-paths src my_package -- pytest tests/
       lazyline run file1.py file2.py my_package -- python script.py
     """
     scopes, command, opts = _parse_run_args(
@@ -353,6 +375,7 @@ def run(
             show_uncalled=show_uncalled,
             no_subprocess=no_subprocess,
             no_multiprocessing=no_multiprocessing,
+            extra_paths=list(extra_paths) if extra_paths else None,
         ),
     )
     opts.validate()
@@ -521,9 +544,89 @@ def _ensure_cwd_on_path() -> None:
         sys.path.insert(0, "")
 
 
+@contextlib.contextmanager
+def _extra_paths_installed(paths: list[str] | None) -> Iterator[None]:
+    """Prepend *paths* to ``sys.path`` and ``PYTHONPATH`` for the lifetime of the block.
+
+    Paths are resolved to absolute paths and prepended in the given order
+    (the first path ends up first on ``sys.path``). The ``PYTHONPATH``
+    environment variable is updated so that child Python subprocesses
+    inherit the same search locations as the parent. All changes are
+    reverted on exit, which keeps state clean for in-process CLI tests.
+
+    When *paths* is empty, falls back to ensuring the current working
+    directory is on ``sys.path`` (mirrors ``python -m`` behavior).
+    Supplying ``--extra-paths`` is treated as authoritative — CWD is
+    not injected, so requested paths keep priority (e.g. ``./mypkg.py``
+    does not shadow ``src/mypkg/``).
+    """
+    if not paths:
+        _ensure_cwd_on_path()
+        yield
+        return
+
+    resolved = [str(Path(p).resolve()) for p in paths]
+    added_to_sys_path: list[str] = []
+    for p in reversed(resolved):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+            added_to_sys_path.append(p)
+
+    orig_pythonpath = os.environ.get("PYTHONPATH")
+    new_entries = os.pathsep.join(resolved)
+    os.environ["PYTHONPATH"] = (
+        f"{new_entries}{os.pathsep}{orig_pythonpath}"
+        if orig_pythonpath
+        else new_entries
+    )
+
+    try:
+        yield
+    finally:
+        for p in added_to_sys_path:
+            with contextlib.suppress(ValueError):
+                sys.path.remove(p)
+        if orig_pythonpath is None:
+            os.environ.pop("PYTHONPATH", None)
+        else:
+            os.environ["PYTHONPATH"] = orig_pythonpath
+
+
+def _build_scope_hint(scopes: list[str], extra_paths: list[str] | None) -> str:
+    """Build a contextual hint when no modules are discovered.
+
+    Looks at the current working directory and the supplied scopes to
+    produce an actionable suggestion — typically pointing to
+    ``--extra-paths`` or ``PYTHONPATH``.
+    """
+    if extra_paths:
+        paths_display = ", ".join(extra_paths)
+        return (
+            f"Hint: --extra-paths was set to [{paths_display}]. Verify those "
+            "directories contain the package you want to profile."
+        )
+
+    cwd = Path.cwd()
+    src_dir = cwd / "src"
+    if src_dir.is_dir():
+        for scope in scopes:
+            if scope.endswith(".py") or "/" in scope:
+                continue
+            first = scope.split(".", 1)[0]
+            if (src_dir / first).is_dir() or (src_dir / f"{first}.py").is_file():
+                return (
+                    f"Hint: found '{first}' under 'src/' — retry with "
+                    "'--extra-paths src' to put it on sys.path."
+                )
+
+    return (
+        "Hint: if your package lives outside the current directory, "
+        "add it with '--extra-paths <dir>' or set PYTHONPATH."
+    )
+
+
 def _discover_all(scopes: list[str]) -> list[ModuleType]:
     """Discover modules from one or more scopes, deduplicating by name."""
-    _ensure_cwd_on_path()
     seen: set[str] = set()
     modules = []
     for scope in scopes:
@@ -553,60 +656,76 @@ def _profile(
     scopes: list[str], command: list[str], opts: _DisplayOptions
 ) -> tuple[list[FunctionProfile], int, int, float, bool, set[str]]:
     """Run the profiling pipeline: discover, register, execute, collect."""
-    modules = _discover_all(scopes)
-    if not modules:
-        _error(f"No modules found in scope '{', '.join(scopes)}'.")
+    with _extra_paths_installed(opts.extra_paths):
+        modules = _discover_all(scopes)
+        if not modules:
+            msg = f"No modules found in scope '{', '.join(scopes)}'."
+            hint = _build_scope_hint(scopes, opts.extra_paths)
+            _error(f"{msg}\n{hint}")
 
-    if not opts.quiet:
-        label = ", ".join(scopes)
-        typer.echo(f"Discovered {len(modules)} module(s) in scope '{label}'.", err=True)
-
-    profiler = create_profiler()
-    scope_files = build_scope_paths(modules)
-    n_registered = register_modules(profiler, modules)
-    n_registered += register_module_level_code(profiler, modules, scopes)
-    registered_names = _get_registered_names(profiler)
-    if not opts.quiet:
-        typer.echo(f"Registered {n_registered} function(s) for profiling.", err=True)
-
-    mem_before = None
-    if opts.memory:
         if not opts.quiet:
-            typer.echo("Memory tracking enabled (tracemalloc).", err=True)
-        mem_before = start_tracking()
+            label = ", ".join(scopes)
+            typer.echo(
+                f"Discovered {len(modules)} module(s) in scope '{label}'.", err=True
+            )
 
-    module_names = [m.__name__ for m in modules]
-    if not opts.quiet:
-        typer.echo("", err=True)
+        profiler = create_profiler()
+        scope_files = build_scope_paths(modules)
+        n_registered = register_modules(profiler, modules)
+        n_registered += register_module_level_code(profiler, modules, scopes)
+        registered_names = _get_registered_names(profiler)
+        if not opts.quiet:
+            typer.echo(
+                f"Registered {n_registered} function(s) for profiling.", err=True
+            )
 
-    sub_ctx = (
-        contextlib.nullcontext(SimpleNamespace(stats=None))
-        if opts.no_subprocess
-        else subprocess_hooks(scopes)
-    )
-    mp_ctx = (
-        contextlib.nullcontext(SimpleNamespace(stats=None))
-        if opts.no_multiprocessing
-        else profiling_hooks(module_names, parent_profiler=profiler)
-    )
+        mem_before = None
+        if opts.memory:
+            if not opts.quiet:
+                typer.echo("Memory tracking enabled (tracemalloc).", err=True)
+            mem_before = start_tracking()
 
-    wall_start = time.monotonic()
-    with sub_ctx as sub_holder, mp_ctx as worker_holder:
-        exit_code = execute_command(profiler, command)
-    wall_time = time.monotonic() - wall_start
+        module_names = [m.__name__ for m in modules]
+        if not opts.quiet:
+            typer.echo("", err=True)
 
-    mem_stats = stop_tracking(mem_before)
-    has_parallel = worker_holder.stats is not None or sub_holder.stats is not None
-    stats = merge_stats(profiler.get_stats(), worker_holder.stats)
-    if sub_holder.stats:
-        stats = merge_stats(stats, sub_holder.stats)
-    results = collect_results(stats, memory_stats=mem_stats, scope_paths=scope_files)
-    enrich_results(results)
-    if not opts.quiet:
-        _warn_high_hit_functions(results)
-        if not results:
-            _print_no_data_hint(exit_code, n_registered)
-    return results, exit_code, n_registered, wall_time, has_parallel, registered_names
+        sub_ctx = (
+            contextlib.nullcontext(SimpleNamespace(stats=None))
+            if opts.no_subprocess
+            else subprocess_hooks(scopes)
+        )
+        mp_ctx = (
+            contextlib.nullcontext(SimpleNamespace(stats=None))
+            if opts.no_multiprocessing
+            else profiling_hooks(module_names, parent_profiler=profiler)
+        )
+
+        wall_start = time.monotonic()
+        with sub_ctx as sub_holder, mp_ctx as worker_holder:
+            exit_code = execute_command(profiler, command)
+        wall_time = time.monotonic() - wall_start
+
+        mem_stats = stop_tracking(mem_before)
+        has_parallel = worker_holder.stats is not None or sub_holder.stats is not None
+        stats = merge_stats(profiler.get_stats(), worker_holder.stats)
+        if sub_holder.stats:
+            stats = merge_stats(stats, sub_holder.stats)
+        results = collect_results(
+            stats, memory_stats=mem_stats, scope_paths=scope_files
+        )
+        enrich_results(results)
+        if not opts.quiet:
+            _warn_high_hit_functions(results)
+            if not results:
+                _print_no_data_hint(exit_code, n_registered)
+        return (
+            results,
+            exit_code,
+            n_registered,
+            wall_time,
+            has_parallel,
+            registered_names,
+        )
 
 
 def _export_results(
