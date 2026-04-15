@@ -26,40 +26,7 @@ lazyline run my_package -- pytest tests/
 lazyline run script.py -- python script.py
 ```
 
-```text
-Discovered 8 module(s) in scope 'my_package'.
-Registered 42 function(s) for profiling.
-
-==========================================================================================
-  🔥 Lazyline results for my_package
-  3 of 42 functions called | Total: 4.1832s | Wall time: 4.0100s | Unit: s (auto)
-
-Summary
-
-Function                                        │Total (s)│ % Total│   Calls│Time/Call (s)
-------------------------------------------------------------------------------------------
-my_package.cleanup.deduplicate                  │   3.8315│   91.6%│       1│     3.831500
-my_package.io.read_csv                          │   0.3412│    8.2%│       1│     0.341200
-my_package.cleanup.normalize                    │   0.0105│    0.3%│   10000│     0.000001
-------------------------------------------------------------------------------------------
-Total                                           │   4.1832
-
-Functions
-
-my_package.cleanup.deduplicate (.../cleanup.py:10)
-3.8315s total │ 1 call │ 3.831500s/call
-
-  Line │    Hits │ Time (s) │  Time/Hit (s) │  % Func │Source
-------------------------------------------------------------------------------------------
-    10 │         │          │               │         │def deduplicate(records):
-    11 │       1 │ 0.000100 │      0.000100 │    0.0% │    seen = []
-    12 │       1 │ 0.000000 │      0.000000 │    0.0% │    result = []
-    13 │   10000 │ 0.003400 │      0.000000 │    0.1% │    for r in records:
-    14 │   10000 │ 3.822100 │      0.000382 │   99.8% │        if r not in seen:
-    15 │    9813 │ 0.004200 │      0.000000 │    0.1% │            seen.append(r)
-    16 │    9813 │ 0.001700 │      0.000000 │    0.0% │            result.append(r)
-    17 │       1 │ 0.000000 │      0.000000 │    0.0% │    return result
-```
+![Lazyline demo](assets/demo.gif)
 
 Line 14 burned 99.8% of `deduplicate` checking membership in a list
 on every iteration — that's your lazy line. Change `seen` to a `set`
