@@ -63,6 +63,27 @@ def test_parse_command_flags_before_script():
     assert (runner, target, extra) == ("script", "run.py", ["--arg"])
 
 
+def test_parse_command_W_flag_consumes_argument():
+    runner, target, extra = _parse_command(
+        ["python", "-W", "ignore", "-m", "pytest", "-v"]
+    )
+    assert (runner, target, extra) == ("module", "pytest", ["-v"])
+
+
+def test_parse_command_X_flag_consumes_argument():
+    runner, target, extra = _parse_command(
+        ["python", "-X", "utf8", "script.py", "--arg"]
+    )
+    assert (runner, target, extra) == ("script", "script.py", ["--arg"])
+
+
+def test_parse_command_mixed_no_arg_and_with_arg_flags():
+    runner, target, extra = _parse_command(
+        ["python", "-u", "-W", "error", "-B", "-X", "dev", "-m", "mymod"]
+    )
+    assert (runner, target, extra) == ("module", "mymod", [])
+
+
 def test_parse_command_empty_after_strip():
     with pytest.raises(ValueError, match="Empty command"):
         _parse_command(["python"])
@@ -195,6 +216,29 @@ def test_execute_command_nonzero_exit_returns_code(tmp_path):
     script.write_text("import sys; sys.exit(42)\n")
     profiler = create_profiler()
     assert execute_command(profiler, ["python", str(script)]) == 42
+
+
+def test_execute_command_enum_exit_code(tmp_path):
+    """Enum exit codes (e.g. pytest ExitCode) should resolve to int."""
+    script = tmp_path / "enum_exit.py"
+    script.write_text(
+        "import enum, sys\n"
+        "class ExitCode(enum.IntEnum):\n"
+        "    TESTS_FAILED = 1\n"
+        "sys.exit(ExitCode.TESTS_FAILED)\n"
+    )
+    profiler = create_profiler()
+    code = execute_command(profiler, ["python", str(script)])
+    assert code == 1
+    assert isinstance(code, int)
+
+
+def test_execute_command_string_exit_code(tmp_path):
+    """String exit codes should map to 1."""
+    script = tmp_path / "str_exit.py"
+    script.write_text("import sys; sys.exit('error message')\n")
+    profiler = create_profiler()
+    assert execute_command(profiler, ["python", str(script)]) == 1
 
 
 def test_execute_command_exception_returns_1(tmp_path):

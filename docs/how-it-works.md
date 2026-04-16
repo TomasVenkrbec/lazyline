@@ -62,6 +62,14 @@ counts and times. Sampling profilers (Scalene, py-spy) periodically
 interrupt the program and record where it is — much lower overhead,
 but statistical approximations rather than exact counts.
 
+### Wall-clock time, not CPU time
+
+`line_profiler` measures **wall-clock time**. Time spent waiting on
+I/O (network, disk, `time.sleep`) is indistinguishable from CPU-heavy
+computation. A line that reads a large file will show the same kind of
+timing as a line doing heavy math. Keep this in mind when interpreting
+results — high time on an I/O line is expected, not a bug.
+
 ### Overhead characteristics
 
 Lazyline's deterministic approach means overhead depends on how many
@@ -91,12 +99,31 @@ small allocations (JSON serialization, string formatting) can see
 loops) sees ~39% extra. Use `--memory` only when you need allocation
 data, not as a default.
 
+> **Warning:** When `--memory` is active, **timing data becomes
+> unreliable** for allocation-heavy code. The `tracemalloc` overhead
+> inflates wall-clock time unevenly — lines that allocate more appear
+> disproportionately slower. If you need accurate timing, run without
+> `--memory` first, then run a separate `--memory` pass for allocation
+> data.
+
 **Memory measurements are not inflated** by line-profiler tracing.
 `tracemalloc` hooks the memory allocator separately. However,
 `tracemalloc` adds ~30% memory overhead for its own bookkeeping.
 
 ### Known limitations
 
+- **Threading:** `line_profiler`'s tracing hook
+  (`sys.settrace`/`sys.monitoring`) is per-thread — only the thread
+  that calls `enable_by_count()` is traced (the main thread).
+  Unlike multiprocessing, where lazyline injects per-process
+  profilers into worker entry points, there is no equivalent
+  hook point for threads. Work done in `threading.Thread` or
+  `ThreadPoolExecutor` will not appear in results.
+- **Generators and `yield`:** `line_profiler` has a known issue
+  where time spent in the *caller* between `yield` resumptions
+  can be attributed to the `yield` line itself. If a generator
+  function shows unexpectedly high time on a `yield` line, this
+  is likely the cause rather than the generator being slow.
 - **Multiprocessing start method:** `ProcessPoolExecutor` and
   `multiprocessing.Pool` profiling requires the `fork` start
   method (default on Linux). `spawn` and `forkserver` are not

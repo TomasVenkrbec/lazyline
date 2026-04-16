@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   profiling, interpretation, and optimization.
 - Claude Code plugin (`.claude-plugin/`) for distributing the skill
   via the plugin marketplace.
+- Automatic insertion of cwd into sys.path if not present.
+- `--extra-paths` flag that prepends directories to `sys.path` and `PYTHONPATH`
+  before discovery.
 
 ### Changed
 
@@ -20,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has decorators.
 - Single unhit lines between hit lines are now shown instead of being replaced
   with `...`.
+- `<module>` entries excluded from grand total (inclusive time
+  double-counts called functions). Marked with `*` and footnote.
+
+### Fixed
+
+- `-W` and `-X` flags incorrectly in no-argument set, causing
+  `python -W ignore -m module` to misidentify `ignore` as script.
+- False-positive "(total includes parallel worker time)" note when
+  inclusive timing inflated total without actual parallel workers.
+- Exit code logged enum repr (e.g. `ExitCode.TESTS_FAILED`) instead
+  of numeric value.
 
 ## [0.2.0] - 2026-04-04
 
@@ -69,4 +83,4 @@ built on top of [line_profiler](https://github.com/pyutils/line_profiler).
 - Subprocess profiling via `sitecustomize.py` injection
 - Optional memory tracking via `--memory` (`tracemalloc`)
 - JSON export with `--output`
-- Syntax highlighting via optional `[color]` extra (`Pygments`)
+- Syntax highlighting (`Pygments`) on TTY output

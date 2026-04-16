@@ -146,7 +146,13 @@ def _get_width(stream: TextIO, width: int | None) -> int:
 
 
 def _is_tty(stream: TextIO) -> bool:
-    """Check whether the output stream is connected to a terminal."""
+    """Check whether ANSI formatting should be used.
+
+    Returns ``False`` when the ``NO_COLOR`` environment variable is set
+    (any value), following the https://no-color.org/ convention.
+    """
+    if os.environ.get("NO_COLOR") is not None:
+        return False
     try:
         return stream.isatty()
     except AttributeError:
@@ -233,6 +239,7 @@ def _print_header_block(
     stream: TextIO,
     is_tty: bool = False,
     wall_time: float | None = None,
+    has_parallel: bool = False,
 ) -> None:
     """Print the results header block (scope, coverage, total, unit)."""
     if n_registered is not None:
@@ -263,7 +270,12 @@ def _print_header_block(
         f"  {coverage} | {total_label}: {total_str}{wall_str} | Unit: {unit_str}",
         file=stream,
     )
-    if wall_time is not None and wall_time > 0 and grand_total > wall_time * 1.5:
+    if (
+        has_parallel
+        and wall_time is not None
+        and wall_time > 0
+        and grand_total > wall_time * 1.5
+    ):
         print("  (total includes parallel worker time)", file=stream)
     elif wall_time is not None and wall_time > 0 and grand_total < wall_time * 0.5:
         print(
@@ -281,6 +293,53 @@ def _validate_print_options(unit: str, sort: str) -> None:
         raise ValueError(f"sort must be one of: {', '.join(_SORT_KEYS)} or omitted")
 
 
+def _print_summary_table(
+    display: list[FunctionProfile],
+    non_module: list[FunctionProfile],
+    grand_total: float,
+    tu: _TimeUnit,
+    name_width: int,
+    total_w: int,
+    tpc_w: int,
+    show_memory: bool,
+    sep: str,
+    term_width: int,
+    stream: TextIO,
+) -> bool:
+    """Print summary table rows and total.
+
+    Returns whether any ``<module>`` entry was displayed.
+    """
+    tp, dp = tu.total_prec, tu.detail_prec
+    m = tu.multiplier
+    has_module_entry = False
+    for fp in display:
+        pct = (fp.total_time / grand_total * 100) if grand_total > 0 else 0.0
+        is_module = fp.name == "<module>" and bool(non_module)
+        if is_module:
+            has_module_entry = True
+        name = _qualified_name(fp, max_len=name_width - 1)
+        mem_str = f"{sep}{_format_memory(fp.memory):>10}" if show_memory else ""
+        tpc = fp.total_time / fp.call_count if fp.call_count > 0 else 0.0
+        pct_marker = "*" if is_module else "%"
+        line = (
+            f"{name:<{name_width}}{sep}{_fmt_num(fp.total_time * m, total_w, tp)}"
+            f"{sep}{pct:>7.1f}{pct_marker}"
+        )
+        tpc_str = _fmt_num(tpc * m, tpc_w, dp)
+        print(
+            f"{line}{sep}{fp.call_count:>8}{sep}{tpc_str}{mem_str}",
+            file=stream,
+        )
+
+    print("-" * term_width, file=stream)
+    print(
+        f"{'Total':<{name_width}}{sep}{_fmt_num(grand_total * m, total_w, tp)}",
+        file=stream,
+    )
+    return has_module_entry
+
+
 def print_summary(
     results: list[FunctionProfile],
     *,
@@ -296,6 +355,7 @@ def print_summary(
     scope: str | None = None,
     n_registered: int | None = None,
     wall_time: float | None = None,
+    has_parallel: bool = False,
 ) -> None:
     """Print a ranked summary of profiling results.
 
@@ -328,6 +388,9 @@ def print_summary(
         Total registered functions for coverage display (``N of M``).
     wall_time
         Wall-clock execution time in seconds, displayed in the header.
+    has_parallel
+        Whether parallel worker or subprocess stats were collected.
+        Controls the "total includes parallel worker time" note.
     """
     _validate_print_options(unit, sort)
 
@@ -353,7 +416,18 @@ def print_summary(
         return
 
     _warn_negative_times(results)
-    grand_total = sum(fp.total_time for fp in results)
+    # Exclude <module> entries from grand total — their time is inclusive
+    # (already counted via the functions they call), so including them
+    # would inflate the total.  Fall back to full sum when every result
+    # is a <module> entry (flat scripts with no function definitions).
+    # Caveat: this under-counts direct top-level work (e.g. loops at module
+    # scope) when the module also calls profiled functions.
+    non_module = [fp for fp in results if fp.name != "<module>"]
+    grand_total = (
+        sum(fp.total_time for fp in non_module)
+        if non_module
+        else sum(fp.total_time for fp in results)
+    )
     n_called = len(results)
 
     filtered, display, empty_label = _filter_and_select(
@@ -391,6 +465,7 @@ def print_summary(
             stream,
             tty,
             wall_time,
+            has_parallel,
         )
 
     total_hdr = f"Total ({tu.label})"
@@ -413,28 +488,25 @@ def print_summary(
     )
     print("-" * term_width, file=stream)
 
-    tp, dp = tu.total_prec, tu.detail_prec
-    m = tu.multiplier
-    for fp in display:
-        pct = (fp.total_time / grand_total * 100) if grand_total > 0 else 0.0
-        name = _qualified_name(fp, max_len=name_width - 1)
-        mem_str = f"{sep}{_format_memory(fp.memory):>10}" if show_memory else ""
-        tpc = fp.total_time / fp.call_count if fp.call_count > 0 else 0.0
-        line = (
-            f"{name:<{name_width}}{sep}{_fmt_num(fp.total_time * m, total_w, tp)}"
-            f"{sep}{pct:>7.1f}%"
-        )
-        tpc_str = _fmt_num(tpc * m, tpc_w, dp)
+    has_module_entry = _print_summary_table(
+        display,
+        non_module,
+        grand_total,
+        tu,
+        name_width,
+        total_w,
+        tpc_w,
+        show_memory,
+        sep,
+        term_width,
+        stream,
+    )
+    if has_module_entry:
         print(
-            f"{line}{sep}{fp.call_count:>8}{sep}{tpc_str}{mem_str}",
+            "* <module> time is inclusive (includes called functions); "
+            "excluded from Total",
             file=stream,
         )
-
-    print("-" * term_width, file=stream)
-    print(
-        f"{'Total':<{name_width}}{sep}{_fmt_num(grand_total * m, total_w, tp)}",
-        file=stream,
-    )
     print("", file=stream)
 
     if summary:
@@ -533,6 +605,8 @@ def _print_function_detail(
     print("-" * term_width, file=stream)
 
     lines = _prepare_lines(fp, compact)
+    # Find the hottest line (highest time among hit lines) for visual marking.
+    hottest_lineno = _find_hottest_lineno(lines)
     for i, lp in enumerate(lines):
         if lp is _ELLIPSIS_SENTINEL:
             _print_ellipsis(stream, show_memory, time_w, tph_w, dsep)
@@ -542,6 +616,7 @@ def _print_function_detail(
             assert isinstance(lp, LineProfile)
             is_def_line = lp.source.lstrip().startswith(("def ", "async def "))
             dim_unhit = is_tty and not (compact and (i == 0 or is_def_line))
+            is_hot = is_tty and lp.lineno == hottest_lineno
             _print_line(
                 lp,
                 func_total,
@@ -554,6 +629,7 @@ def _print_function_detail(
                 dim_unhit,
                 lexer,
                 formatter,
+                is_hot,
             )
 
     print("", file=stream)
@@ -561,6 +637,17 @@ def _print_function_detail(
 
 
 _ELLIPSIS_SENTINEL = object()
+
+
+def _find_hottest_lineno(lines: list[LineProfile | object]) -> int | None:
+    """Return the lineno of the line with the most time, or None."""
+    best_time = 0.0
+    best_lineno: int | None = None
+    for lp in lines:
+        if isinstance(lp, LineProfile) and lp.hits > 0 and lp.time > best_time:
+            best_time = lp.time
+            best_lineno = lp.lineno
+    return best_lineno
 
 
 def _flush_unhit(buffer: list[LineProfile], result: list[LineProfile | object]) -> None:
@@ -678,6 +765,7 @@ def _print_line(
     dim_unhit: bool = False,
     lexer: Lexer | None = None,
     formatter: Formatter | None = None,
+    is_hot: bool = False,
 ) -> None:
     """Print a single profiled line (hit or non-hit)."""
     if lp.hits > 0:
@@ -689,7 +777,9 @@ def _print_line(
         t_str = _fmt_num(lp.time * m, time_w, dp)
         h_str = _fmt_num(tph * m, tph_w, dp)
         source = _highlight_source(lp.source, lexer, formatter)
-        cols = f"{lp.lineno:>6}{dsep}{lp.hits:>8}{dsep}{t_str}{dsep}{h_str}"
+        # Mark the hottest line with >> prefix (TTY only, via is_hot).
+        prefix = f"{_BOLD_START}>>{_BOLD_END}" if is_hot else "  "
+        cols = f"{prefix}{lp.lineno:>4}{dsep}{lp.hits:>8}{dsep}{t_str}{dsep}{h_str}"
         print(f"{cols}{dsep}{pct:>7.1f}%{mem_str}{dsep}{source}", file=stream)
     else:
         # Use plain separators for un-hit lines so the outer dim ANSI is

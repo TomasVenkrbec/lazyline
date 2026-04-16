@@ -28,6 +28,7 @@ The `--` separator between SCOPE and COMMAND is required.
 | `--unit UNIT` | Time display unit: `auto` (default), `s`, `ms`, `us`, or `ns` |
 | `--no-subprocess` | Disable subprocess profiling injection |
 | `--no-multiprocessing` | Disable multiprocessing worker profiling |
+| `--extra-paths DIR` | Prepend `DIR` to `sys.path` (and `PYTHONPATH`) before discovery. Repeatable. |
 
 Options can appear before or after SCOPE:
 
@@ -139,6 +140,16 @@ lazyline run utils.py -- python script.py
 lazyline run utils.py my_package -- python evaluate.py
 ```
 
+Profile a package that lives in a non-default location (e.g. `src/`
+layout) using `--extra-paths` to prepend directories to `sys.path`
+before discovery — the same paths are also added to `PYTHONPATH` so
+child Python subprocesses can import the package too:
+
+```bash
+lazyline run --extra-paths src my_package -- pytest tests/
+lazyline run --extra-paths src --extra-paths vendor my_package -- pytest
+```
+
 Profile any importable package — even stdlib:
 
 ```bash
@@ -200,3 +211,9 @@ with no ANSI formatting.
 
 With `--memory`, an additional `Net Mem` column shows per-line
 net memory allocation delta (bytes allocated minus freed).
+
+> **Note:** `tracemalloc` adds significant overhead on allocation-heavy
+> code (up to 20x+), which distorts timing data. For accurate timing,
+> profile without `--memory` first. See
+> [How It Works — Memory mode overhead](how-it-works.md#memory-mode-overhead)
+> for details.

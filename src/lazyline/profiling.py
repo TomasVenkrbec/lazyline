@@ -257,8 +257,9 @@ def execute_command(profiler: LineProfiler, command: list[str]) -> int:
     except SystemExit as exc:
         code = exc.code
         if code is not None and code != 0:
-            logger.warning("Command exited with code %s.", code)
-            exit_code = code if isinstance(code, int) else 1
+            numeric = int(code) if isinstance(code, int) else getattr(code, "value", 1)
+            logger.warning("Command exited with code %s.", numeric)
+            exit_code = numeric if isinstance(numeric, int) else 1
     except KeyboardInterrupt:
         logger.warning("Command interrupted by user.")
         exit_code = 130
@@ -360,10 +361,23 @@ _PYTHON_FLAGS_NO_ARG = frozenset(
         "-u",
         "-v",
         "-vv",
-        "-W",
         "-x",
     ]
 )
+
+_PYTHON_FLAGS_WITH_ARG = frozenset(["-W", "-X"])
+
+
+def _skip_python_flags(tokens: list[str]) -> list[str]:
+    """Strip leading Python interpreter flags, returning remaining tokens."""
+    while tokens:
+        if tokens[0] in _PYTHON_FLAGS_NO_ARG:
+            tokens = tokens[1:]
+        elif tokens[0] in _PYTHON_FLAGS_WITH_ARG:
+            tokens = tokens[2:]  # skip flag + its required argument
+        else:
+            break
+    return tokens
 
 
 def _parse_command(command: list[str]) -> tuple[str, str, list[str]]:
@@ -387,9 +401,7 @@ def _parse_command(command: list[str]) -> tuple[str, str, list[str]]:
         msg = "Empty command after stripping Python executable."
         raise ValueError(msg)
 
-    # Skip Python interpreter flags (e.g. -u, -O, -B) before -m/-c/script.
-    while tokens and tokens[0] in _PYTHON_FLAGS_NO_ARG:
-        tokens = tokens[1:]
+    tokens = _skip_python_flags(tokens)
 
     if not tokens:
         msg = "Only interpreter flags found, no command to run."

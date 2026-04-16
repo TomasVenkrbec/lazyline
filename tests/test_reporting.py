@@ -1135,6 +1135,16 @@ def test_emoji_suppressed_in_non_tty():
     assert "Lazyline results for pkg" in output
 
 
+def test_no_color_env_disables_ansi(monkeypatch):
+    """NO_COLOR env var should suppress all ANSI formatting."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    stream = io.StringIO()
+    stream.isatty = lambda: True  # type: ignore[assignment]
+    print_summary([_result_with_time()], stream=stream, scope="pkg")
+    output = stream.getvalue()
+    assert "\033[" not in output
+
+
 def test_wall_time_in_header():
     stream = io.StringIO()
     print_summary(
@@ -1177,13 +1187,14 @@ def test_shorten_path_ambiguous_root_uses_last():
 
 
 def test_parallel_worker_time_note():
-    """Show parallel note when total >> wall time."""
+    """Show parallel note when total >> wall time and parallel data exists."""
     stream = io.StringIO()
     print_summary(
         [_result_with_time(total_time=120.0)],
         stream=stream,
         scope="pkg",
         wall_time=30.0,
+        has_parallel=True,
     )
     assert "parallel worker time" in stream.getvalue()
 
@@ -1196,8 +1207,64 @@ def test_no_parallel_note_when_times_close():
         stream=stream,
         scope="pkg",
         wall_time=28.0,
+        has_parallel=True,
     )
     assert "parallel worker time" not in stream.getvalue()
+
+
+def test_no_parallel_note_without_parallel_data():
+    """No parallel note when total >> wall due to inclusive timing, not workers."""
+    stream = io.StringIO()
+    print_summary(
+        [_result_with_time(total_time=120.0)],
+        stream=stream,
+        scope="pkg",
+        wall_time=30.0,
+        has_parallel=False,
+    )
+    assert "parallel worker time" not in stream.getvalue()
+
+
+def test_module_entry_excluded_from_grand_total():
+    """<module> time should not inflate the grand total."""
+    func = _result_with_time(total_time=1.0)
+    mod_entry = FunctionProfile(
+        module="script",
+        name="<module>",
+        filename="/fake/script.py",
+        start_line=1,
+        total_time=1.0,
+        call_count=1,
+        lines=[LineProfile(lineno=1, hits=1, time=1.0, source="main()")],
+    )
+    stream = io.StringIO()
+    print_summary([func, mod_entry], stream=stream, scope="pkg")
+    output = stream.getvalue()
+    # Grand total should be 1.0 (func only), not 2.0
+    assert "inclusive" in output
+    # The <module> entry should have * instead of %
+    output_lines = output.split("\n")
+    module_lines = [ln for ln in output_lines if "<module>" in ln]
+    assert any("*" in ln for ln in module_lines)
+
+
+def test_module_only_results_use_full_total():
+    """When all results are <module>, grand total should include them."""
+    mod_entry = FunctionProfile(
+        module="script",
+        name="<module>",
+        filename="/fake/script.py",
+        start_line=1,
+        total_time=1.0,
+        call_count=1,
+        lines=[LineProfile(lineno=1, hits=1, time=1.0, source="x = 1")],
+    )
+    stream = io.StringIO()
+    print_summary([mod_entry], stream=stream, scope="pkg")
+    output = stream.getvalue()
+    # Should NOT show the footnote since <module> is the only entry
+    assert "inclusive" not in output
+    assert "%" in output  # normal % marker, not *
 
 
 def test_wall_time_omitted_when_none():
@@ -1527,6 +1594,42 @@ def test_no_highlighting_in_non_tty():
     print_summary(results, stream=stream, width=120)
     output = stream.getvalue()
     assert "\x1b[" not in output
+
+
+def test_hottest_line_marker_in_tty():
+    """The hottest line should have a >> marker in TTY mode."""
+    fp = FunctionProfile(
+        module="mod",
+        name="func",
+        filename="/fake/mod.py",
+        start_line=1,
+        total_time=1.0,
+        call_count=1,
+        lines=[
+            LineProfile(lineno=1, hits=0, time=0.0, source="def func():"),
+            LineProfile(lineno=2, hits=1, time=0.1, source="    x = 1"),
+            LineProfile(lineno=3, hits=1, time=0.9, source="    y = slow()"),
+        ],
+    )
+    stream = _tty_stream()
+    print_summary([fp], stream=stream, width=120)
+    output = stream.getvalue()
+    # Line 3 is the hottest — should have >> marker
+    # Use the 90% indicator to find the right line (line 3 has 90% of time)
+    for line in output.splitlines():
+        if "90.0%" in line:
+            assert ">>" in line, f"Missing >> on hottest line: {line}"
+            break
+    else:
+        raise AssertionError("90.0% line not found in output")
+
+
+def test_no_hottest_marker_in_non_tty():
+    """Non-tty output should not have >> markers."""
+    results = [_result_with_time()]
+    stream = io.StringIO()
+    print_summary(results, stream=stream, width=120)
+    assert ">>" not in stream.getvalue()
 
 
 # --- _normalize_patterns tests ---
