@@ -12,7 +12,7 @@
       "name": "lazyline",
       "source": "./",
       "description": "Profile Python code with lazyline to find line-level bottlenecks and optimize iteratively.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "keywords": ["profiling", "performance", "optimization", "python"]
     }
   ]

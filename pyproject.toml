@@ -1,6 +1,6 @@
 [project]
 name = "lazyline"
-version = "0.3.0"
+version = "0.3.1"
 description = "Zero-config line-level Python profiler. Profile any package or script with one command — no @profile decorators, no code changes. Automatic subprocess and multiprocessing support."
 readme = "README.md"
 license = "MIT"

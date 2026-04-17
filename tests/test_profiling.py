@@ -9,6 +9,7 @@ from lazyline.models import FunctionProfile, LineProfile
 from lazyline.profiling import (
     _build_file_to_module_map,
     _is_valid_module_path,
+    _module_is_importable,
     _parse_command,
     _resolve_console_script,
     _resolve_module_name,
@@ -123,6 +124,29 @@ def test_valid_module_path_empty():
     assert _is_valid_module_path("") is False
 
 
+# --- _module_is_importable ---
+
+
+def test_module_is_importable_existing():
+    assert _module_is_importable("sys") is True
+
+
+def test_module_is_importable_missing():
+    assert _module_is_importable("definitely_not_installed_lazyline_xyz") is False
+
+
+def test_module_is_importable_empty():
+    # Empty name raises ValueError in find_spec; should be swallowed.
+    assert _module_is_importable("") is False
+
+
+def test_module_is_importable_submodule_of_non_package():
+    # sys is a module, not a package — has no __path__. find_spec raises
+    # (ValueError/AttributeError/ModuleNotFoundError depending on version);
+    # the helper swallows all of them.
+    assert _module_is_importable("sys.not_a_submodule") is False
+
+
 # --- _resolve_console_script ---
 
 
@@ -172,6 +196,58 @@ def test_parse_command_unknown_hyphenated_falls_back_to_module():
     runner, target, extra = _parse_command(["no-such-cmd-xyz", "arg"])
     assert runner == "module"
     assert target == "no-such-cmd-xyz"
+
+
+def test_parse_command_valid_identifier_not_importable_uses_console_script(monkeypatch):
+    """A bare command whose name is a valid Python identifier but has no
+    importable module of that name should fall back to console_scripts.
+
+    Regression: previously, any valid identifier was dispatched via
+    ``runpy.run_module``, even when the real entry point lived under a
+    different import path (e.g., package ``acme.mytool`` registering a
+    ``mytool`` console script).
+    """
+    name = "mytool"
+    monkeypatch.setattr("lazyline.profiling._module_is_importable", lambda n: False)
+    monkeypatch.setattr(
+        "lazyline.profiling._resolve_console_script",
+        lambda n: _fake_ep(name, "acme.mytool.cli:app") if n == name else None,
+    )
+    runner, target, extra = _parse_command([name, "--help"])
+    assert runner == "entry_point"
+    assert target == "acme.mytool.cli:app"
+    assert extra == [name, "--help"]
+
+
+def test_parse_command_importable_module_preferred_over_console_script(monkeypatch):
+    """When both an importable module and a console script share the name,
+    prefer the module (preserves pre-fix behavior for tools like ``pytest``
+    that ship as both a module and a console script)."""
+    monkeypatch.setattr(
+        "lazyline.profiling._resolve_console_script",
+        lambda n: _fake_ep("pytest", "some.other:main") if n == "pytest" else None,
+    )
+    runner, target, _ = _parse_command(["pytest", "-v"])
+    assert runner == "module"
+    assert target == "pytest"
+
+
+def test_parse_command_dotted_path_skips_importability_check(monkeypatch):
+    """Dotted paths dispatch as modules without calling
+    ``_module_is_importable``. Otherwise ``find_spec`` would import
+    parent packages before the profiler is enabled, causing their
+    module-level lines to be excluded from the profile.
+    """
+    calls: list[str] = []
+
+    def tracking(name: str) -> bool:
+        calls.append(name)
+        return False  # Would block dispatch if consulted.
+
+    monkeypatch.setattr("lazyline.profiling._module_is_importable", tracking)
+    runner, target, extra = _parse_command(["some.dotted.path", "arg"])
+    assert (runner, target, extra) == ("module", "some.dotted.path", ["arg"])
+    assert calls == []
 
 
 # --- execute_command ---
