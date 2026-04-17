@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-04-17
+
+### Fixed
+
+- Bare commands that name a non-importable `console_scripts` entry
+  point (e.g., `mytool` from the `acme.mytool` package) now dispatch
+  via the entry point instead of failing with `ImportError: No module
+  named <cmd>`.
+
 ## [0.3.0] - 2026-04-16
 
 ### Added

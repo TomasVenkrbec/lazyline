@@ -9,6 +9,7 @@ import sys
 import types
 import warnings
 from importlib.metadata import EntryPoint, entry_points
+from importlib.util import find_spec
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -329,6 +330,21 @@ def _is_valid_module_path(name: str) -> bool:
     return bool(name) and all(part.isidentifier() for part in name.split("."))
 
 
+def _module_is_importable(name: str) -> bool:
+    """Check whether ``name`` resolves to an importable module.
+
+    Wraps :func:`importlib.util.find_spec` to swallow the exceptions it
+    raises on malformed names or non-package parents (``ImportError``,
+    ``AttributeError``, ``ValueError``). Only reports ``True`` when
+    ``find_spec`` returns a non-``None`` spec.
+    """
+    try:
+        spec = find_spec(name)
+    except (ImportError, AttributeError, ValueError):
+        return False
+    return spec is not None
+
+
 def _resolve_console_script(name: str) -> EntryPoint | None:
     """Look up a console script entry point by command name.
 
@@ -432,11 +448,26 @@ def _parse_command(command: list[str]) -> tuple[str, str, list[str]]:
 def _resolve_bare_command(first: str, tokens: list[str]) -> tuple[str, str, list[str]]:
     """Resolve a bare command to a runner type.
 
-    Valid module paths (e.g., ``"pytest"``) are treated as modules.
-    Otherwise, the command is looked up in installed console_scripts
-    entry points. Falls back to module if not found.
+    Precedence:
+
+    1. If ``first`` is a valid module path, run it as a module. For
+       bare names, additionally require that the module is importable
+       — this lets a console script take over a name whose top-level
+       module doesn't exist (e.g., ``mytool`` registered by the
+       ``acme.mytool`` package).
+    2. Otherwise, if the name is registered as a ``console_scripts``
+       entry point, run the entry point. This covers hyphenated CLI
+       tools like ``my-tool``.
+    3. Otherwise, fall back to the module runner so the user sees a
+       clear ``ImportError`` for an unknown command.
+
+    Dotted paths skip the importability check because
+    ``importlib.util.find_spec`` on ``a.b.c`` imports ``a`` and
+    ``a.b`` as a side effect. Those imports would happen before the
+    profiler is enabled, so their module-level lines would be missing
+    from the profile.
     """
-    if _is_valid_module_path(first):
+    if _is_valid_module_path(first) and ("." in first or _module_is_importable(first)):
         return ("module", first, tokens[1:])
 
     ep = _resolve_console_script(first)
